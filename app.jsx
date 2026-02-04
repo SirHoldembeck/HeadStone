@@ -1,13 +1,4 @@
 const { useEffect, useMemo, useState } = React;
-const {
-  HashRouter,
-  Routes,
-  Route,
-  Navigate,
-  NavLink,
-  useNavigate,
-  useLocation
-} = ReactRouterDOM;
 
 const ROLE_CONFIGS = {
   admin: {
@@ -50,6 +41,33 @@ const ROLE_CONFIGS = {
   }
 };
 
+const ROUTES = {
+  admin: {
+    dashboard: DashboardPage,
+    memorials: MemorialsPage,
+    scheduling: SchedulingPage,
+    customers: CustomersPage,
+    cemeteries: CemeteriesPage,
+    archive: ArchivePage,
+    reports: ReportsPage,
+    settings: SettingsPage,
+    onboarding: OnboardingPage
+  },
+  employee: {
+    dashboard: EmployeeDashboardPage,
+    scheduling: EmployeeSchedulingPage,
+    memorials: MemorialsPage,
+    archive: ArchivePage,
+    reports: ReportsPage
+  },
+  customer: {
+    dashboard: CustomerDashboardPage,
+    memorials: CustomerMemorialsPage,
+    archive: ArchivePage,
+    settings: CustomerSettingsPage
+  }
+};
+
 function getStoredRole() {
   try {
     const stored = localStorage.getItem('hs_role');
@@ -68,6 +86,72 @@ function storeRole(role) {
   } catch (err) {
     // ignore storage errors
   }
+}
+
+function normalizePath(value) {
+  if (!value) return '';
+  let path = value;
+  if (path.startsWith('#')) {
+    path = path.slice(1);
+  }
+  if (!path.startsWith('/')) {
+    path = `/${path}`;
+  }
+  return path;
+}
+
+function getCurrentHashPath() {
+  return normalizePath(window.location.hash || '');
+}
+
+function useHashPath() {
+  const [path, setPath] = useState(getCurrentHashPath);
+
+  useEffect(() => {
+    function handleHashChange() {
+      setPath(getCurrentHashPath());
+    }
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  function navigate(nextPath) {
+    const normalized = normalizePath(nextPath);
+    if (!normalized) return;
+    const current = getCurrentHashPath();
+    if (current !== normalized) {
+      window.location.hash = normalized;
+    }
+  }
+
+  return [path, navigate];
+}
+
+function parseRoute(path) {
+  const storedRole = getStoredRole();
+  const normalized = normalizePath(path);
+  const segments = normalized.replace(/^\/+/, '').split('/').filter(Boolean);
+
+  let role = segments[0] || storedRole;
+  if (!ROLE_CONFIGS[role]) {
+    role = storedRole;
+  }
+
+  const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.admin;
+  const routeMap = ROUTES[role] || ROUTES.admin;
+  let page = segments[1] || config.defaultRoute;
+
+  if (!routeMap[page]) {
+    page = config.defaultRoute;
+  }
+
+  return {
+    role,
+    page,
+    config,
+    canonicalPath: `${config.basePath}/${page}`
+  };
 }
 
 function DashboardPage() {
@@ -521,18 +605,8 @@ function CustomerSettingsPage() {
   );
 }
 
-function NotFoundPage() {
-  return (
-    <>
-      <h1 className="page-title">Page Not Found</h1>
-      <p className="page-subtitle">That route does not exist.</p>
-    </>
-  );
-}
-
-function Layout({ role, navItems, onRoleChange, children }) {
+function Layout({ role, navItems, currentPath, onRoleChange, children }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const location = useLocation();
 
   useEffect(() => {
     if (isSidebarOpen) {
@@ -548,7 +622,7 @@ function Layout({ role, navItems, onRoleChange, children }) {
 
   useEffect(() => {
     setIsSidebarOpen(false);
-  }, [location.pathname]);
+  }, [currentPath]);
 
   function handleToggleMenu() {
     setIsSidebarOpen((open) => !open);
@@ -571,14 +645,14 @@ function Layout({ role, navItems, onRoleChange, children }) {
 
         <nav className="nav">
           {navItems.map((item) => (
-            <NavLink
+            <a
               key={item.id}
-              to={item.to}
-              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+              className={`nav-item${item.to === currentPath ? ' active' : ''}`}
+              href={`#${item.to}`}
               onClick={handleCloseMenu}
             >
               {item.label}
-            </NavLink>
+            </a>
           ))}
         </nav>
       </aside>
@@ -620,85 +694,38 @@ function Layout({ role, navItems, onRoleChange, children }) {
   );
 }
 
-function RoleShell({ role }) {
-  const config = ROLE_CONFIGS[role];
-  const navigate = useNavigate();
+function App() {
+  const [path, navigate] = useHashPath();
+  const { role, page, config, canonicalPath } = useMemo(() => parseRoute(path), [path]);
+
+  useEffect(() => {
+    if (!canonicalPath) return;
+    if (path !== canonicalPath) {
+      navigate(canonicalPath);
+    }
+  }, [canonicalPath, navigate, path]);
 
   useEffect(() => {
     storeRole(role);
   }, [role]);
+
+  const routeMap = ROUTES[role] || ROUTES.admin;
+  const PageComponent = routeMap[page] || routeMap[config.defaultRoute];
 
   function handleRoleChange(nextRole) {
     const nextConfig = ROLE_CONFIGS[nextRole] || ROLE_CONFIGS.admin;
     navigate(`${nextConfig.basePath}/${nextConfig.defaultRoute}`);
   }
 
-  const routes = useMemo(() => {
-    if (role === 'admin') {
-      return [
-        { path: 'dashboard', element: <DashboardPage /> },
-        { path: 'memorials', element: <MemorialsPage /> },
-        { path: 'scheduling', element: <SchedulingPage /> },
-        { path: 'customers', element: <CustomersPage /> },
-        { path: 'cemeteries', element: <CemeteriesPage /> },
-        { path: 'archive', element: <ArchivePage /> },
-        { path: 'reports', element: <ReportsPage /> },
-        { path: 'settings', element: <SettingsPage /> },
-        { path: 'onboarding', element: <OnboardingPage /> }
-      ];
-    }
-
-    if (role === 'employee') {
-      return [
-        { path: 'dashboard', element: <EmployeeDashboardPage /> },
-        { path: 'scheduling', element: <EmployeeSchedulingPage /> },
-        { path: 'memorials', element: <MemorialsPage /> },
-        { path: 'archive', element: <ArchivePage /> },
-        { path: 'reports', element: <ReportsPage /> }
-      ];
-    }
-
-    return [
-      { path: 'dashboard', element: <CustomerDashboardPage /> },
-      { path: 'memorials', element: <CustomerMemorialsPage /> },
-      { path: 'archive', element: <ArchivePage /> },
-      { path: 'settings', element: <CustomerSettingsPage /> }
-    ];
-  }, [role]);
-
   return (
-    <Layout role={role} navItems={config.nav} onRoleChange={handleRoleChange}>
-      <Routes>
-        {routes.map((route) => (
-          <Route key={route.path} path={route.path} element={route.element} />
-        ))}
-        <Route path="*" element={<Navigate to={`${config.basePath}/${config.defaultRoute}`} replace />} />
-      </Routes>
+    <Layout
+      role={role}
+      navItems={config.nav}
+      currentPath={canonicalPath}
+      onRoleChange={handleRoleChange}
+    >
+      <PageComponent />
     </Layout>
-  );
-}
-
-function AppRoutes() {
-  const defaultRole = getStoredRole();
-
-  return (
-    <Routes>
-      <Route
-        path="/"
-        element={<Navigate to={`${ROLE_CONFIGS[defaultRole].basePath}/${ROLE_CONFIGS[defaultRole].defaultRoute}`} replace />} />
-      <Route path="/admin/*" element={<RoleShell role="admin" />} />
-      <Route path="/employee/*" element={<RoleShell role="employee" />} />
-      <Route path="/customer/*" element={<RoleShell role="customer" />} />
-      <Route path="*" element={<NotFoundPage />} />
-    </Routes>
-  );
-}
-
-function App() {
-  return (
-    <HashRouter>
-      <AppRoutes />
-    </HashRouter>
   );
 }
 
