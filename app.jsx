@@ -7,14 +7,33 @@ const ROLE_CONFIGS = {
     defaultRoute: 'dashboard',
     nav: [
       { id: 'dashboard', label: 'Dashboard', to: '/admin/dashboard' },
+      { id: 'onboarding', label: 'Onboard Customer', to: '/admin/onboarding' },
       { id: 'memorials', label: 'Memorials', to: '/admin/memorials' },
       { id: 'scheduling', label: 'Scheduling', to: '/admin/scheduling' },
-      { id: 'users', label: 'Users', to: '/admin/users' },
+      { id: 'users', label: 'Users & Roles', to: '/admin/users' },
       { id: 'customers', label: 'Customers', to: '/admin/customers' },
       { id: 'cemeteries', label: 'Cemeteries', to: '/admin/cemeteries' },
       { id: 'archive', label: 'Photos & Archive', to: '/admin/archive' },
+      { id: 'emails', label: 'Emails', to: '/admin/emails' },
       { id: 'reports', label: 'Reports', to: '/admin/reports' },
       { id: 'settings', label: 'Settings', to: '/admin/settings' }
+    ]
+  },
+  frontdesk: {
+    label: 'Front Desk',
+    basePath: '/frontdesk',
+    defaultRoute: 'dashboard',
+    nav: [
+      { id: 'dashboard', label: 'Front Desk', to: '/frontdesk/dashboard' },
+      { id: 'onboarding', label: 'Onboard Customer', to: '/frontdesk/onboarding' },
+      { id: 'customers', label: 'Customers', to: '/frontdesk/customers' },
+      { id: 'memorials', label: 'Memorials', to: '/frontdesk/memorials' },
+      { id: 'scheduling', label: 'Scheduling', to: '/frontdesk/scheduling' },
+      { id: 'cemeteries', label: 'Cemeteries', to: '/frontdesk/cemeteries' },
+      { id: 'emails', label: 'Emails', to: '/frontdesk/emails' },
+      { id: 'archive', label: 'Archive', to: '/frontdesk/archive' },
+      { id: 'reports', label: 'Reports', to: '/frontdesk/reports' },
+      { id: 'settings', label: 'Settings', to: '/frontdesk/settings' }
     ]
   },
   employee: {
@@ -26,7 +45,8 @@ const ROLE_CONFIGS = {
       { id: 'scheduling', label: 'My Schedule', to: '/employee/scheduling' },
       { id: 'memorials', label: 'Memorials', to: '/employee/memorials' },
       { id: 'archive', label: 'Photos & Archive', to: '/employee/archive' },
-      { id: 'reports', label: 'Reports', to: '/employee/reports' }
+      { id: 'reports', label: 'Reports', to: '/employee/reports' },
+      { id: 'settings', label: 'Settings', to: '/employee/settings' }
     ]
   },
   customer: {
@@ -42,649 +62,745 @@ const ROLE_CONFIGS = {
   }
 };
 
-const TEST_VIEW_OPTIONS = [
-  { value: 'admin', label: 'Admin' },
-  { value: 'employee', label: 'Employee' },
-  { value: 'customer', label: 'Customer' },
-  { value: 'login', label: 'Login Screen' }
+// All API calls go through the same base so the frontend and Django share origin.
+function getApiBase() {
+  const configured = String(window.__API_BASE__ || '').trim();
+  if (configured.startsWith('/')) return configured.replace(/\/+$/, '');
+  if (/^https?:\/\/[^/]+/i.test(configured)) return configured.replace(/\/+$/, '');
+
+  const { protocol, port } = window.location;
+  const isHttp = protocol === 'http:' || protocol === 'https:';
+  if (isHttp && port === '8000') return '/api';
+  return 'http://127.0.0.1:8000/api';
+}
+
+const API_BASE = getApiBase();
+
+function getCookie(name) {
+  const cookies = document.cookie ? document.cookie.split(';') : [];
+  const needle = `${name}=`;
+  for (const rawCookie of cookies) {
+    const cookie = rawCookie.trim();
+    if (cookie.startsWith(needle)) {
+      return decodeURIComponent(cookie.slice(needle.length));
+    }
+  }
+  return '';
+}
+
+async function apiFetch(path, options = {}) {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const method = String(options.method || 'GET').toUpperCase();
+  const headers = { ...(options.headers || {}) };
+
+  if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+    const csrfToken = getCookie('csrftoken');
+    if (csrfToken) {
+      headers['X-CSRFToken'] = csrfToken;
+    }
+  }
+
+  return fetch(`${API_BASE}${normalizedPath}`, {
+    ...options,
+    method,
+    credentials: 'include',
+    headers
+  });
+}
+
+function formatCurrency(value) {
+  const amount = Number.isFinite(value) ? value : 0;
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return '0%';
+  return `${value.toFixed(1)}%`;
+}
+
+function formatDateTimeShort(value) {
+  if (!value) return 'Not scheduled';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return 'Not scheduled';
+  return dt.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function formatDateOnly(value) {
+  if (!value) return 'Unscheduled';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return 'Unscheduled';
+  return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function toDateInputValue(value = new Date()) {
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return '';
+  const year = dt.getFullYear();
+  const month = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toDatetimeLocalInput(value) {
+  if (!value) return '';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '';
+  const tzOffsetMs = dt.getTimezoneOffset() * 60 * 1000;
+  const local = new Date(dt.getTime() - tzOffsetMs);
+  return local.toISOString().slice(0, 16);
+}
+
+function datetimeLocalToIso(value) {
+  if (!value) return '';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '';
+  return dt.toISOString();
+}
+
+const SCHEDULING_DATE_KEY = 'hs_scheduling_calendar_date';
+const FULLCALENDAR = window.FullCalendar || null;
+
+function getStoredSchedulingDate() {
+  try {
+    const value = localStorage.getItem(SCHEDULING_DATE_KEY);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return value;
+  } catch (err) {
+    // ignore storage errors
+  }
+  return toDateInputValue(new Date());
+}
+
+function buildScheduleEvent(service) {
+  if (!service?.scheduled_start) return null;
+  const start = new Date(service.scheduled_start);
+  if (Number.isNaN(start.getTime())) return null;
+
+  const durationMinutes = Number(service.estimated_minutes) || 90;
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+  const isDraft = service.status === 'draft';
+  const isInProgress = service.status === 'in_progress';
+
+  return {
+    id: String(service.id),
+    title: service.memorial_name || `Service #${service.id}`,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    classNames: [
+      isDraft ? 'fc-event-draft' : '',
+      isInProgress ? 'fc-event-progress' : '',
+      service.status === 'scheduled' ? 'fc-event-scheduled' : ''
+    ].filter(Boolean),
+    extendedProps: {
+      cemeteryName: service.cemetery_name || 'No cemetery',
+      technicianName: service.technician_name || 'Unassigned',
+      price: service.price,
+      estimatedMinutes: durationMinutes
+    }
+  };
+}
+
+function SchedulingCalendar({ services, calendarDate, onDateChange, onSelectService, selectedServiceId }) {
+  const containerRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!FULLCALENDAR || !containerRef.current) return undefined;
+
+    const calendar = new FULLCALENDAR.Calendar(containerRef.current, {
+      initialView: 'dayGridMonth',
+      initialDate: calendarDate,
+      events: services.map(buildScheduleEvent).filter(Boolean),
+      height: 'auto',
+      selectable: true,
+      nowIndicator: true,
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+      },
+      eventTimeFormat: {
+        hour: 'numeric',
+        minute: '2-digit',
+        meridiem: 'short'
+      },
+      dateClick(info) {
+        onDateChange(info.dateStr);
+      },
+      eventClick(info) {
+        onDateChange(toDateInputValue(info.event.start || calendarDate));
+        onSelectService(info.event.id);
+      },
+      eventContent(arg) {
+        const technicianName = arg.event.extendedProps.technicianName;
+        const isSelected = String(selectedServiceId) === String(arg.event.id);
+
+        const wrapper = document.createElement('div');
+        wrapper.className = `fc-event-card${isSelected ? ' is-selected' : ''}`;
+
+        const title = document.createElement('div');
+        title.className = 'fc-event-title';
+        title.textContent = arg.event.title;
+
+        const meta = document.createElement('div');
+        meta.className = 'fc-event-meta';
+        meta.textContent = technicianName;
+
+        wrapper.appendChild(title);
+        wrapper.appendChild(meta);
+        return { domNodes: [wrapper] };
+      }
+    });
+
+    calendar.render();
+    return () => calendar.destroy();
+  }, [services, calendarDate, onDateChange, onSelectService, selectedServiceId]);
+
+  if (!FULLCALENDAR) {
+    return <p className="meta">Calendar library failed to load.</p>;
+  }
+
+  return (
+    <div className="fullcalendar-shell">
+      <div ref={containerRef}></div>
+    </div>
+  );
+}
+
+function parseCoordinate(rawValue, kind) {
+  const raw = String(rawValue || '').trim();
+  if (!raw) return { ok: false, error: `Missing ${kind === 'lat' ? 'latitude' : 'longitude'}.` };
+
+  const upper = raw.toUpperCase();
+  const hasSouthOrWest = /[SW]/.test(upper);
+  const hasNorthOrEast = /[NE]/.test(upper);
+
+  // Allow inputs such as: "40.730610", "40.730610 N", "40.730610° N"
+  const numberMatch = upper.match(/-?\d+(?:\.\d+)?/);
+  if (!numberMatch) {
+    return { ok: false, error: `Invalid ${kind === 'lat' ? 'latitude' : 'longitude'} format.` };
+  }
+
+  let value = Number(numberMatch[0]);
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: `Invalid ${kind === 'lat' ? 'latitude' : 'longitude'} value.` };
+  }
+
+  if (hasSouthOrWest) value = -Math.abs(value);
+  if (hasNorthOrEast) value = Math.abs(value);
+
+  const min = kind === 'lat' ? -90 : -180;
+  const max = kind === 'lat' ? 90 : 180;
+  if (value < min || value > max) {
+    return {
+      ok: false,
+      error: `${kind === 'lat' ? 'Latitude' : 'Longitude'} must be between ${min} and ${max}.`
+    };
+  }
+
+  return { ok: true, value: Number(value.toFixed(6)) };
+}
+
+function formatApiError(payload, fallbackMessage) {
+  if (!payload) return fallbackMessage;
+  if (typeof payload === 'string') return payload;
+  if (Array.isArray(payload)) {
+    const first = payload.find(Boolean);
+    return first ? String(first) : fallbackMessage;
+  }
+  if (typeof payload === 'object') {
+    if (payload.detail) return String(payload.detail);
+    for (const value of Object.values(payload)) {
+      const message = formatApiError(value, '');
+      if (message) return message;
+    }
+  }
+  return fallbackMessage;
+}
+
+function useApi(path, defaultValue, enabled = true, options = {}) {
+  const refreshEvent = options.refreshEvent || '';
+  const [state, setState] = useState({ loading: true, error: null, data: defaultValue });
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!enabled) return undefined;
+
+    async function load() {
+      try {
+        const res = await apiFetch(path);
+        if (!res.ok) throw new Error(`API error: ${res.status}`);
+        const json = await res.json();
+        if (!cancelled) setState({ loading: false, error: null, data: json });
+      } catch (err) {
+        if (!cancelled) setState({ loading: false, error: err.message || 'Request failed', data: defaultValue });
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [path, enabled, reloadToken]);
+
+  useEffect(() => {
+    if (!refreshEvent) return undefined;
+    function handleRefresh() {
+      setReloadToken((value) => value + 1);
+    }
+    window.addEventListener(refreshEvent, handleRefresh);
+    return () => window.removeEventListener(refreshEvent, handleRefresh);
+  }, [refreshEvent]);
+
+  return state;
+}
+
+function useDashboardData(enabled) {
+  const { loading, error, data } = useApi(
+    '/dashboard/summary/',
+    { summary: null, upcoming_services: [], recent_completed: [] },
+    enabled,
+    { refreshEvent: 'hs:schedule-updated' }
+  );
+  return {
+    loading,
+    error,
+    summary: data.summary,
+    upcoming: data.upcoming_services,
+    recent: data.recent_completed || []
+  };
+}
+
+const WORKFLOW_STORE_KEY = 'hs_frontend_workflow_store_v1';
+const ONBOARDING_DRAFT_KEY = 'hs_frontend_onboarding_draft_v1';
+
+const MATERIAL_OPTIONS = [
+  { value: 'granite', label: 'Granite' },
+  { value: 'marble', label: 'Marble' },
+  { value: 'limestone', label: 'Limestone' },
+  { value: 'sandstone', label: 'Sandstone' },
+  { value: 'bronze', label: 'Bronze' },
+  { value: 'other', label: 'Other / TBD' }
 ];
+
+function createEmptyWorkflowStore() {
+  return {
+    customerMeta: {},
+    cemeteryMeta: {},
+    memorialMeta: {},
+    localCemeteries: [],
+    localMemorials: []
+  };
+}
+
+function readJsonStorage(key, fallbackValue) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallbackValue;
+    return JSON.parse(raw);
+  } catch (err) {
+    return fallbackValue;
+  }
+}
+
+function writeJsonStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    // ignore storage errors
+  }
+  return value;
+}
+
+function readWorkflowStore() {
+  const fallback = createEmptyWorkflowStore();
+  const parsed = readJsonStorage(WORKFLOW_STORE_KEY, fallback);
+  return {
+    ...fallback,
+    ...(parsed || {}),
+    customerMeta: { ...(parsed?.customerMeta || {}) },
+    cemeteryMeta: { ...(parsed?.cemeteryMeta || {}) },
+    memorialMeta: { ...(parsed?.memorialMeta || {}) },
+    localCemeteries: Array.isArray(parsed?.localCemeteries) ? parsed.localCemeteries : [],
+    localMemorials: Array.isArray(parsed?.localMemorials) ? parsed.localMemorials : []
+  };
+}
+
+function updateWorkflowStore(updater) {
+  const current = readWorkflowStore();
+  const next = typeof updater === 'function' ? updater(current) : updater;
+  writeJsonStorage(WORKFLOW_STORE_KEY, next);
+  window.dispatchEvent(new Event('hs:workflow-updated'));
+  return next;
+}
+
+function saveCustomerMeta(customerId, fields) {
+  const key = String(customerId);
+  updateWorkflowStore((store) => ({
+    ...store,
+    customerMeta: {
+      ...store.customerMeta,
+      [key]: {
+        ...(store.customerMeta[key] || {}),
+        ...(fields || {})
+      }
+    }
+  }));
+}
+
+function saveCemeteryMeta(cemeteryId, fields) {
+  const key = String(cemeteryId);
+  updateWorkflowStore((store) => ({
+    ...store,
+    cemeteryMeta: {
+      ...store.cemeteryMeta,
+      [key]: {
+        ...(store.cemeteryMeta[key] || {}),
+        ...(fields || {})
+      }
+    }
+  }));
+}
+
+function saveMemorialMeta(memorialId, fields) {
+  const key = String(memorialId);
+  updateWorkflowStore((store) => ({
+    ...store,
+    memorialMeta: {
+      ...store.memorialMeta,
+      [key]: {
+        ...(store.memorialMeta[key] || {}),
+        ...(fields || {})
+      }
+    }
+  }));
+}
+
+function upsertLocalCemetery(record) {
+  updateWorkflowStore((store) => {
+    const nextRows = [...store.localCemeteries];
+    const index = nextRows.findIndex((row) => String(row.id) === String(record.id));
+    if (index >= 0) {
+      nextRows[index] = { ...nextRows[index], ...record };
+    } else {
+      nextRows.push(record);
+    }
+    return {
+      ...store,
+      localCemeteries: nextRows
+    };
+  });
+}
+
+function upsertLocalMemorial(record) {
+  updateWorkflowStore((store) => {
+    const nextRows = [...store.localMemorials];
+    const index = nextRows.findIndex((row) => String(row.id) === String(record.id));
+    if (index >= 0) {
+      nextRows[index] = { ...nextRows[index], ...record };
+    } else {
+      nextRows.push(record);
+    }
+    return {
+      ...store,
+      localMemorials: nextRows
+    };
+  });
+}
+
+function useWorkflowStore() {
+  const [store, setStore] = useState(readWorkflowStore);
+
+  useEffect(() => {
+    function handleUpdate() {
+      setStore(readWorkflowStore());
+    }
+
+    window.addEventListener('hs:workflow-updated', handleUpdate);
+    return () => window.removeEventListener('hs:workflow-updated', handleUpdate);
+  }, []);
+
+  return store;
+}
+
+function readOnboardingDraft() {
+  const draft = readJsonStorage(ONBOARDING_DRAFT_KEY, {});
+  return draft && typeof draft === 'object' ? draft : {};
+}
+
+function saveOnboardingDraft(draft) {
+  writeJsonStorage(ONBOARDING_DRAFT_KEY, draft || {});
+}
+
+function clearOnboardingDraft() {
+  try {
+    localStorage.removeItem(ONBOARDING_DRAFT_KEY);
+  } catch (err) {
+    // ignore storage errors
+  }
+}
+
+function makeLocalId(prefix) {
+  return `local-${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeLookup(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function matchesCustomerRecord(memorial, customer) {
+  if (!memorial || !customer) return false;
+  if (memorial.customer_id != null && customer.id != null) {
+    return String(memorial.customer_id) === String(customer.id);
+  }
+  return normalizeLookup(memorial.customer) === normalizeLookup(customer.full_name);
+}
+
+function matchesCemeteryRecord(memorial, cemetery) {
+  if (!memorial || !cemetery) return false;
+  if (memorial.cemetery_id != null && cemetery.id != null) {
+    return String(memorial.cemetery_id) === String(cemetery.id);
+  }
+  return normalizeLookup(memorial.cemetery) === normalizeLookup(cemetery.name);
+}
+
+function getMaterialLabel(value) {
+  const match = MATERIAL_OPTIONS.find((option) => option.value === value);
+  return match ? match.label : 'Other / TBD';
+}
+
+function buildMergedMemorials(apiMemorials, workflowStore) {
+  const store = workflowStore || createEmptyWorkflowStore();
+  const apiRows = (Array.isArray(apiMemorials) ? apiMemorials : []).map((row) => {
+    const meta = store.memorialMeta[String(row.id)] || {};
+    const material = meta.material || 'other';
+    const photoNames = Array.isArray(meta.photo_names) ? meta.photo_names : [];
+    return {
+      ...row,
+      source: 'api',
+      customer_id: meta.customer_id ?? null,
+      cemetery_id: meta.cemetery_id ?? null,
+      name_on_stone: meta.name_on_stone || row.customer || '',
+      material,
+      material_label: getMaterialLabel(material),
+      stone_style: meta.stone_style || '',
+      has_plaque: Boolean(meta.has_plaque),
+      has_paint: Boolean(meta.has_paint),
+      decoration_notes: meta.decoration_notes || '',
+      location_description: meta.location_description || '',
+      age_years: meta.age_years || '',
+      previous_cleaning_notes: meta.previous_cleaning_notes || '',
+      notes: meta.notes || '',
+      photo_names: photoNames,
+      regional_team: meta.regional_team || (row.last_service_date ? 'Regional field team' : 'Scheduling team')
+    };
+  });
+
+  const localRows = (Array.isArray(store.localMemorials) ? store.localMemorials : []).map((row) => {
+    const material = row.material || 'other';
+    return {
+      ...row,
+      source: 'local',
+      material,
+      material_label: getMaterialLabel(material),
+      photo_names: Array.isArray(row.photo_names) ? row.photo_names : [],
+      regional_team: row.regional_team || 'Regional field team'
+    };
+  });
+
+  return [...apiRows, ...localRows].sort((a, b) => {
+    const customerCompare = String(a.customer || '').localeCompare(String(b.customer || ''));
+    if (customerCompare !== 0) return customerCompare;
+    return String(a.name_on_stone || a.customer || '').localeCompare(String(b.name_on_stone || b.customer || ''));
+  });
+}
+
+function buildMergedCustomers(apiCustomers, mergedMemorials, workflowStore) {
+  const store = workflowStore || createEmptyWorkflowStore();
+  return (Array.isArray(apiCustomers) ? apiCustomers : [])
+    .map((customer) => {
+      const meta = store.customerMeta[String(customer.id)] || {};
+      const memorialsCount = mergedMemorials.filter((memorial) => matchesCustomerRecord(memorial, customer)).length;
+      return {
+        ...customer,
+        ...meta,
+        memorials_count: memorialsCount || customer.memorials_count || 0
+      };
+    })
+    .sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')));
+}
+
+function buildMergedCemeteries(apiCemeteries, mergedMemorials, workflowStore) {
+  const store = workflowStore || createEmptyWorkflowStore();
+  const apiRows = (Array.isArray(apiCemeteries) ? apiCemeteries : []).map((cemetery) => {
+    const meta = store.cemeteryMeta[String(cemetery.id)] || {};
+    const memorialsCount = mergedMemorials.filter((memorial) => matchesCemeteryRecord(memorial, { ...cemetery, ...meta })).length;
+    return {
+      ...cemetery,
+      ...meta,
+      source: 'api',
+      memorials_count: memorialsCount || cemetery.memorials_count || 0
+    };
+  });
+
+  const localRows = (Array.isArray(store.localCemeteries) ? store.localCemeteries : []).map((cemetery) => {
+    const memorialsCount = mergedMemorials.filter((memorial) => matchesCemeteryRecord(memorial, cemetery)).length;
+    return {
+      ...cemetery,
+      source: 'local',
+      active_services: cemetery.active_services || 0,
+      memorials_count: memorialsCount
+    };
+  });
+
+  return [...apiRows, ...localRows].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+function buildRevenueChartRows(recentCompleted, scheduledServices) {
+  const now = new Date();
+  const buckets = [];
+
+  for (let offset = 5; offset >= 0; offset -= 1) {
+    const dt = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+    buckets.push({
+      key: `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`,
+      label: dt.toLocaleDateString('en-US', { month: 'short' }),
+      collected: 0,
+      scheduled: 0
+    });
+  }
+
+  const indexByKey = Object.fromEntries(buckets.map((bucket) => [bucket.key, bucket]));
+
+  (Array.isArray(recentCompleted) ? recentCompleted : []).forEach((row) => {
+    const dt = new Date(row.completed_date);
+    if (Number.isNaN(dt.getTime())) return;
+    const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+    if (!indexByKey[key]) return;
+    indexByKey[key].collected += Number(row.amount || 0);
+  });
+
+  (Array.isArray(scheduledServices) ? scheduledServices : []).forEach((row) => {
+    const dt = new Date(row.scheduled_start);
+    if (Number.isNaN(dt.getTime())) return;
+    const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+    if (!indexByKey[key]) return;
+    indexByKey[key].scheduled += Number(row.price || 0);
+  });
+
+  return buckets;
+}
+
+function getOnboardingPathForCurrentRole() {
+  const normalized = normalizePath(window.location.hash || '');
+  const segments = normalized.replace(/^\/+/, '').split('/').filter(Boolean);
+  const role = ROLE_CONFIGS[segments[0]] ? segments[0] : 'frontdesk';
+  return `${ROLE_CONFIGS[role].basePath}/onboarding`;
+}
+
+function openOnboardingWorkflow(draft = {}) {
+  saveOnboardingDraft(draft);
+  window.location.hash = getOnboardingPathForCurrentRole();
+}
+
+function RevenueSnapshotChart({ rows }) {
+  const data = Array.isArray(rows) ? rows : [];
+  const maxValue = data.reduce((max, row) => Math.max(max, row.collected || 0, row.scheduled || 0), 0);
+
+  if (!data.length || maxValue <= 0) {
+    return <div className="chart-placeholder">Revenue graph will fill in as completed and scheduled jobs accumulate.</div>;
+  }
+
+  return (
+    <div className="revenue-chart">
+      {data.map((row) => (
+        <div key={row.key} className="revenue-row">
+          <span className="revenue-month">{row.label}</span>
+          <div className="revenue-bars">
+            <div
+              className="revenue-bar collected"
+              style={{ width: `${Math.max(12, (row.collected / maxValue) * 100)}%` }}
+            >
+              {row.collected > 0 ? `Collected ${formatCurrency(row.collected)}` : 'Collected'}
+            </div>
+            <div
+              className="revenue-bar scheduled"
+              style={{ width: `${Math.max(12, (row.scheduled / maxValue) * 100)}%` }}
+            >
+              {row.scheduled > 0 ? `Scheduled ${formatCurrency(row.scheduled)}` : 'Scheduled'}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const ROUTES = {
   admin: {
     dashboard: DashboardPage,
     memorials: MemorialsPage,
-    memorialdetail: MemorialDetailPage,
     scheduling: SchedulingPage,
     users: UsersAdminPage,
     customers: CustomersPage,
-    customerdetail: CustomerDetailPage,
     cemeteries: CemeteriesPage,
     archive: ArchivePage,
+    emails: EmailsPage,
     reports: ReportsPage,
     settings: SettingsPage,
     onboarding: OnboardingPage
+  },
+  frontdesk: {
+    dashboard: FrontDeskDashboardPage,
+    onboarding: OnboardingPage,
+    customers: CustomersPage,
+    memorials: MemorialsPage,
+    scheduling: SchedulingPage,
+    cemeteries: CemeteriesPage,
+    emails: EmailsPage,
+    archive: ArchivePage,
+    reports: ReportsPage,
+    settings: UserSettingsPage
   },
   employee: {
     dashboard: EmployeeDashboardPage,
     scheduling: EmployeeSchedulingPage,
     memorials: MemorialsPage,
-    memorialdetail: MemorialDetailPage,
     archive: ArchivePage,
-    reports: ReportsPage
+    reports: ReportsPage,
+    settings: UserSettingsPage
   },
   customer: {
     dashboard: CustomerDashboardPage,
     memorials: CustomerMemorialsPage,
     archive: ArchivePage,
-    settings: CustomerSettingsPage
+    settings: UserSettingsPage
   }
 };
 
-const SEARCH_CONTENT = {
-  admin: [
-    {
-      title: 'New Service Onboarding',
-      description: 'Create a new customer and memorial',
-      to: '/admin/onboarding',
-      keywords: 'new service onboarding add customer memorial'
-    },
-    {
-      title: 'Smith Family Headstone',
-      description: 'Memorial record in Greenwood Cemetery',
-      to: '/admin/memorials',
-      keywords: 'memorial smith greenwood maintained'
-    },
-    {
-      title: 'Sarah Johnson',
-      description: 'Customer profile',
-      to: '/admin/customers',
-      keywords: 'customer sarah johnson annual maintenance'
-    },
-    {
-      title: 'Greenwood Cemetery',
-      description: 'Cemetery service location',
-      to: '/admin/cemeteries',
-      keywords: 'cemetery location memorials services'
-    },
-    {
-      title: 'User Management',
-      description: 'Create and edit employee access',
-      to: '/admin/users',
-      keywords: 'users create employee edit team phone full-time part-time'
-    }
-  ],
-  employee: [
-    {
-      title: 'Task Queue',
-      description: 'Photo uploads and maintenance checks',
-      to: '/employee/dashboard',
-      keywords: 'tasks uploads maintenance checks crew'
-    },
-    {
-      title: 'Crew Schedule',
-      description: 'Daily route and assignments',
-      to: '/employee/scheduling',
-      keywords: 'schedule route assignments crew'
-    }
-  ],
-  customer: [
-    {
-      title: 'Service Status',
-      description: 'Plan progress and upcoming visit',
-      to: '/customer/dashboard',
-      keywords: 'service status progress upcoming visit'
-    },
-    {
-      title: 'My Memorials',
-      description: 'Your active memorial records',
-      to: '/customer/memorials',
-      keywords: 'my memorials active records'
-    },
-    {
-      title: 'Notification Preferences',
-      description: 'Email and phone settings',
-      to: '/customer/settings',
-      keywords: 'notifications email phone settings'
-    }
-  ]
-};
-
-const CUSTOMER_ACCOUNTS_KEY = 'hs_customer_accounts';
-const EMPLOYEE_ACCOUNTS_KEY = 'hs_employee_accounts';
-const CUSTOMER_SESSION_KEY = 'hs_customer_session';
-const TEMP_PASSWORD_QUEUE_KEY = 'hs_temp_password_queue';
-const JOB_RECORDS_KEY = 'hs_job_records';
-
-const DEFAULT_ADMIN_CUSTOMERS = [
-  {
-    name: 'Sarah Johnson',
-    email: 'sarah.johnson@example.com',
-    memorials: 2,
-    activePlan: 'Annual Maintenance',
-    lastContact: '09/15/23',
-    serviceType: 'Headstone Cleaning',
-    serviceLocation: 'Greenwood Cemetery',
-    lastService: '09/12/23',
-    nextService: '10/12/23',
-    subscriptionStatus: 'Active',
-    subscriptionRenewal: '12/01/23',
-    createdAtLabel: '04/10/23',
-    lifetimeValue: '$2,160.00',
-    annualCare: 'Semi-Annual Care',
-    customerNotes: 'Family prefers Friday morning updates by text after service completion.',
-    hasPortalAccess: false,
-    memorialDetails: [
-      {
-        id: 'sarah-1',
-        memorial: 'Smith Family Headstone',
-        cemetery: 'Greenwood Cemetery',
-        subStatus: 'Scheduled',
-        plan: 'Annual Maintenance',
-        nextService: '10/12/23',
-        lastService: '09/12/23',
-        serviceInfo: 'Biannual wash, trim, and detail.',
-        photoStatus: 'Before/after approved'
-      },
-      {
-        id: 'sarah-2',
-        memorial: 'Johnson Memorial Bench',
-        cemetery: 'Greenwood Cemetery',
-        subStatus: 'Quote Sent',
-        plan: 'Initial Restoration',
-        nextService: 'Pending approval',
-        lastService: 'Not started',
-        serviceInfo: 'Stone reset and inscription clean-up.',
-        photoStatus: 'Before photos uploaded'
-      }
-    ]
-  }
-];
-
-const DEFAULT_MEMORIAL_RECORDS = [
-  {
-    id: 'm-1001',
-    memorial: 'Smith Family Headstone',
-    customer: 'Sarah Johnson',
-    cemetery: 'Greenwood Cemetery',
-    plan: 'Annual Maintenance',
-    lastService: '09/12/23',
-    nextService: '10/12/23',
-    subStatus: 'Scheduled',
-    serviceInfo: 'Biannual wash, trim, and detail.',
-    photoStatus: 'Ready for review',
-    team: 'Northern Utah',
-    technician: 'Spencer'
-  },
-  {
-    id: 'm-1002',
-    memorial: 'Jones Memorial',
-    customer: 'Michael Jones',
-    cemetery: 'Oakwood Memorial Park',
-    plan: 'Initial Restoration',
-    lastService: '08/18/23',
-    nextService: '10/05/23',
-    subStatus: 'Pre-Work Forms Sent',
-    serviceInfo: 'Deep clean and crack seal.',
-    photoStatus: 'Before photos on file',
-    team: 'Southern Utah',
-    technician: 'Avery'
-  },
-  {
-    id: 'm-1003',
-    memorial: 'Thompson Headstone',
-    customer: 'Lydia Thompson',
-    cemetery: 'Hillcrest Cemetery',
-    plan: 'Quarterly Care',
-    lastService: '09/03/23',
-    nextService: '11/03/23',
-    subStatus: 'On Track',
-    serviceInfo: 'Quarterly wash and inspection.',
-    photoStatus: 'No new photos required',
-    team: 'Northern Utah',
-    technician: 'Jade'
-  },
-  {
-    id: 'm-1004',
-    memorial: 'Carter Memorial',
-    customer: 'Daniel Carter',
-    cemetery: 'Rolling Hills',
-    plan: 'Annual Maintenance',
-    lastService: '09/23/23',
-    nextService: '12/23/23',
-    subStatus: 'Completed',
-    serviceInfo: 'Repair complete, annual follow-up.',
-    photoStatus: 'After photos pending review',
-    team: 'Southern Utah',
-    technician: 'Spencer'
-  }
-];
-
-const MONTHLY_REVENUE_SERIES = [
-  { month: 'Jan', scheduled: 7400, collected: 6900 },
-  { month: 'Feb', scheduled: 7800, collected: 7300 },
-  { month: 'Mar', scheduled: 8100, collected: 7600 },
-  { month: 'Apr', scheduled: 8600, collected: 8000 },
-  { month: 'May', scheduled: 9000, collected: 8450 }
-];
-
-const DEFAULT_SCHEDULE_ENTRIES = [
-  {
-    id: 'svc-1',
-    time: '9:00 AM',
-    memorial: 'Smith Family Headstone',
-    customer: 'Sarah Johnson',
-    cemetery: 'Greenwood Cemetery',
-    team: 'Northern Utah',
-    tech: 'Spencer',
-    customerNotes: 'Please text photo update after completion.',
-    leadershipNotes: 'Confirm inscription clarity before departure.'
-  },
-  {
-    id: 'svc-2',
-    time: '10:30 AM',
-    memorial: 'Jones Memorial',
-    customer: 'Michael Jones',
-    cemetery: 'Oakwood Memorial Park',
-    team: 'Southern Utah',
-    tech: 'Avery',
-    customerNotes: 'Gate access code provided by cemetery office.',
-    leadershipNotes: 'Capture close-up of crack repair zone.'
-  },
-  {
-    id: 'svc-3',
-    time: '11:00 AM',
-    memorial: 'Thompson Headstone',
-    customer: 'Lydia Thompson',
-    cemetery: 'Hillcrest Cemetery',
-    team: 'Northern Utah',
-    tech: 'Jade',
-    customerNotes: 'Customer wants before/after side-by-side.',
-    leadershipNotes: 'Verify sealant cure time before photos.'
-  }
-];
-
-const DEFAULT_JOB_RECORDS = [
-  {
-    id: 'job-1001',
-    memorialId: 'm-1001',
-    memorial: 'Smith Family Headstone',
-    customer: 'Sarah Johnson',
-    cemetery: 'Greenwood Cemetery',
-    status: 'Completed',
-    createdAt: '2023-09-12T17:00:00.000Z',
-    completedAt: '2023-09-12T18:30:00.000Z',
-    nextService: '10/12/23',
-    team: 'Northern Utah',
-    technician: 'Spencer',
-    customerNotes: 'Customer requested before/after update by text.',
-    leadershipNotes: 'Inscription quality check complete.',
-    photoFiles: ['smith-before.jpg', 'smith-after.jpg'],
-    documentFiles: ['invoice-1001.pdf']
-  },
-  {
-    id: 'job-1002',
-    memorialId: 'm-1002',
-    memorial: 'Jones Memorial',
-    customer: 'Michael Jones',
-    cemetery: 'Oakwood Memorial Park',
-    status: 'Pre-Work Forms Sent',
-    createdAt: '2023-09-02T18:00:00.000Z',
-    completedAt: '',
-    nextService: '10/05/23',
-    team: 'Southern Utah',
-    technician: 'Avery',
-    customerNotes: 'Waiver and permission form sent for signature.',
-    leadershipNotes: 'Track return of signed documents before dispatch.',
-    photoFiles: ['jones-intake-1.jpg'],
-    documentFiles: ['jones-waiver.pdf']
-  }
-];
-
-function createDefaultMemorialDetail({ customerName, serviceType, cemetery }) {
-  return {
-    id: `${(customerName || 'new').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-1`,
-    memorial: `${customerName || 'New Customer'} Memorial`,
-    cemetery: cemetery || 'Pending Assignment',
-    subStatus: 'Intake',
-    plan: serviceType || 'Initial Restoration',
-    nextService: 'To Be Scheduled',
-    lastService: 'Not Started',
-    serviceInfo: 'Quote drafted and pending approval.',
-    photoStatus: 'No photos uploaded'
-  };
+function getServiceTypeLabel(service) {
+  return service?.service_type_label || service?.service_type || 'Service';
 }
 
-function formatDisplayDate(value, fallback) {
-  if (!value) return fallback;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return fallback;
-  return parsed.toLocaleDateString();
-}
+const LOGIN_PATH = '/login';
+const SETUP_PASSWORD_PATH = '/setup-password';
 
-function normalizeText(value) {
-  return (value || '').toString().trim().toLowerCase();
-}
-
-function memorialLookupKey(record) {
-  return [
-    normalizeText(record.memorial),
-    normalizeText(record.customer),
-    normalizeText(record.cemetery)
-  ].join('|');
-}
-
-function buildAdminCustomers(accounts) {
-  const customersByEmail = new Map();
-
-  DEFAULT_ADMIN_CUSTOMERS.forEach((customer) => {
-    const email = normalizeEmail(customer.email);
-    const memorialDetails = Array.isArray(customer.memorialDetails) && customer.memorialDetails.length > 0
-      ? customer.memorialDetails
-      : [createDefaultMemorialDetail({
-        customerName: customer.name,
-        serviceType: customer.activePlan,
-        cemetery: customer.serviceLocation
-      })];
-
-    customersByEmail.set(email, {
-      ...customer,
-      memorialDetails,
-      memorials: memorialDetails.length,
-      email
-    });
-  });
-
-  (accounts || []).forEach((account) => {
-    const email = normalizeEmail(account.email);
-    if (!email) return;
-
-    const existing = customersByEmail.get(email) || {};
-    const createdAtLabel = formatDisplayDate(account.createdAt, existing.createdAtLabel || 'New');
-    const lastContact = formatDisplayDate(
-      account.updatedAt || account.createdAt,
-      existing.lastContact || createdAtLabel
-    );
-    const serviceType = account.serviceType || existing.serviceType || 'Initial Restoration';
-    const memorialDetails = Array.isArray(account.memorialDetails) && account.memorialDetails.length > 0
-      ? account.memorialDetails
-      : (Array.isArray(existing.memorialDetails) && existing.memorialDetails.length > 0
-        ? existing.memorialDetails
-        : [createDefaultMemorialDetail({
-          customerName: account.name || existing.name,
-          serviceType,
-          cemetery: account.cemetery || existing.serviceLocation
-        })]);
-    const hasPortalAccess = account.hasPortalAccess ?? existing.hasPortalAccess ?? true;
-    const mustResetPassword = Boolean(account.mustResetPassword);
-
-    customersByEmail.set(email, {
-      email,
-      name: account.name || existing.name || email,
-      memorials: memorialDetails.length,
-      activePlan: memorialDetails[0]?.plan || account.serviceType || existing.activePlan || 'Initial Restoration',
-      lastContact,
-      serviceType,
-      serviceLocation: memorialDetails[0]?.cemetery || existing.serviceLocation || 'Pending Assignment',
-      lastService: memorialDetails[0]?.lastService || existing.lastService || 'Not Started',
-      nextService: memorialDetails[0]?.nextService || existing.nextService || 'To Be Scheduled',
-      subscriptionStatus: hasPortalAccess
-        ? (mustResetPassword ? 'Pending Activation' : existing.subscriptionStatus || 'Active')
-        : 'No Portal Access',
-      subscriptionRenewal: existing.subscriptionRenewal || createdAtLabel,
-      createdAtLabel,
-      mustResetPassword,
-      hasPortalAccess,
-      lifetimeValue: existing.lifetimeValue || '$0.00',
-      annualCare: existing.annualCare || 'Not enrolled',
-      customerNotes: account.customerNotes || existing.customerNotes || 'No notes recorded yet.',
-      memorialDetails
-    });
-  });
-
-  return Array.from(customersByEmail.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function buildMemorialRecords(customers, jobRecords) {
-  const recordsById = new Map();
-  const keyToId = new Map();
-
-  function addOrMerge(record) {
-    const id = record.id || memorialLookupKey(record);
-    const key = memorialLookupKey(record);
-    const existingId = keyToId.get(key);
-    const targetId = existingId || id;
-    const existing = recordsById.get(targetId) || {};
-
-    recordsById.set(targetId, {
-      ...existing,
-      ...record,
-      id: targetId
-    });
-    keyToId.set(key, targetId);
-    return targetId;
-  }
-
-  DEFAULT_MEMORIAL_RECORDS.forEach((record) => addOrMerge(record));
-
-  (customers || []).forEach((customer) => {
-    const details = Array.isArray(customer.memorialDetails) ? customer.memorialDetails : [];
-    details.forEach((detail, index) => {
-      addOrMerge({
-        id: detail.id || `${normalizeEmail(customer.email)}-${index + 1}`,
-        memorial: detail.memorial || `${customer.name} Memorial`,
-        customer: customer.name,
-        cemetery: detail.cemetery || customer.serviceLocation || 'Pending Assignment',
-        plan: detail.plan || customer.activePlan || 'Initial Restoration',
-        lastService: detail.lastService || customer.lastService || 'Not Started',
-        nextService: detail.nextService || customer.nextService || 'To Be Scheduled',
-        subStatus: detail.subStatus || 'Intake',
-        serviceInfo: detail.serviceInfo || customer.serviceType || 'Pending service scope',
-        photoStatus: detail.photoStatus || 'No photos uploaded',
-        team: detail.team || 'Unassigned',
-        technician: detail.technician || detail.tech || 'Unassigned'
-      });
-    });
-  });
-
-  (jobRecords || []).forEach((job) => {
-    const recordId = job.memorialId || memorialLookupKey(job);
-    const existing = recordsById.get(recordId);
-    const key = memorialLookupKey(job);
-    const fallbackId = keyToId.get(key) || recordId;
-    const targetId = existing ? recordId : fallbackId;
-    const current = recordsById.get(targetId) || {};
-
-    addOrMerge({
-      ...current,
-      id: targetId,
-      memorial: job.memorial || current.memorial || 'Untitled Memorial',
-      customer: job.customer || current.customer || 'Unknown Customer',
-      cemetery: job.cemetery || current.cemetery || 'Pending Assignment',
-      subStatus: job.status || current.subStatus || 'Intake',
-      nextService: job.nextService || current.nextService || 'To Be Scheduled',
-      lastService: formatDisplayDate(
-        job.completedAt || job.createdAt,
-        current.lastService || 'Not Started'
-      ),
-      team: job.team || current.team || 'Unassigned',
-      technician: job.technician || current.technician || 'Unassigned',
-      photoStatus: Array.isArray(job.photoFiles) && job.photoFiles.length > 0
-        ? `${job.photoFiles.length} photo file(s)`
-        : current.photoStatus || 'No photos uploaded'
-    });
-  });
-
-  return Array.from(recordsById.values()).sort((a, b) => a.memorial.localeCompare(b.memorial));
-}
-
-function getRoleSearchIndex(role) {
+function getDefaultPathForRole(role) {
   const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.admin;
-  const navEntries = config.nav.map((item) => ({
-    title: item.label,
-    description: `${config.label} view`,
-    to: item.to,
-    keywords: `${item.label} ${item.id}`
-  }));
-
-  return [...navEntries, ...(SEARCH_CONTENT[role] || [])];
+  return `${config.basePath}/${config.defaultRoute}`;
 }
 
-function getSearchResults(role, query) {
-  const needle = (query || '').trim().toLowerCase();
-  if (!needle) return [];
-
-  const deduped = new Map();
-  getRoleSearchIndex(role).forEach((entry) => {
-    const key = `${entry.to}|${entry.title}`;
-    if (!deduped.has(key)) {
-      deduped.set(key, entry);
-    }
-  });
-
-  return Array.from(deduped.values())
-    .map((entry) => {
-      const title = entry.title.toLowerCase();
-      const description = (entry.description || '').toLowerCase();
-      const keywords = (entry.keywords || '').toLowerCase();
-      const haystack = `${title} ${description} ${keywords}`;
-
-      if (!haystack.includes(needle)) {
-        return null;
-      }
-
-      let score = 0;
-      if (title.startsWith(needle)) score += 6;
-      if (title.includes(needle)) score += 3;
-      if (description.includes(needle)) score += 2;
-      if (keywords.includes(needle)) score += 1;
-
-      return { ...entry, score };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
-    .slice(0, 8);
+function getInviteToken() {
+  const params = new URLSearchParams(window.location.search || '');
+  return (params.get('invite') || '').trim();
 }
 
-function normalizeEmail(value) {
-  return (value || '').trim().toLowerCase();
-}
-
-function loadCustomerAccounts() {
-  try {
-    const raw = localStorage.getItem(CUSTOMER_ACCOUNTS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    return [];
-  }
-}
-
-function saveCustomerAccounts(accounts) {
-  try {
-    localStorage.setItem(CUSTOMER_ACCOUNTS_KEY, JSON.stringify(accounts));
-  } catch (err) {
-    // ignore storage errors
-  }
-}
-
-function loadEmployeeAccounts() {
-  try {
-    const raw = localStorage.getItem(EMPLOYEE_ACCOUNTS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    return [];
-  }
-}
-
-function saveEmployeeAccounts(accounts) {
-  try {
-    localStorage.setItem(EMPLOYEE_ACCOUNTS_KEY, JSON.stringify(accounts));
-  } catch (err) {
-    // ignore storage errors
-  }
-}
-
-function loadJobRecords() {
-  try {
-    const raw = localStorage.getItem(JOB_RECORDS_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      return DEFAULT_JOB_RECORDS;
-    }
-    return parsed;
-  } catch (err) {
-    return DEFAULT_JOB_RECORDS;
-  }
-}
-
-function saveJobRecords(records) {
-  try {
-    localStorage.setItem(JOB_RECORDS_KEY, JSON.stringify(records));
-  } catch (err) {
-    // ignore storage errors
-  }
-}
-
-function loadCustomerSession() {
-  try {
-    return localStorage.getItem(CUSTOMER_SESSION_KEY) || '';
-  } catch (err) {
-    return '';
-  }
-}
-
-function storeCustomerSession(email) {
-  try {
-    if (email) {
-      localStorage.setItem(CUSTOMER_SESSION_KEY, email);
-    } else {
-      localStorage.removeItem(CUSTOMER_SESSION_KEY);
-    }
-  } catch (err) {
-    // ignore storage errors
-  }
-}
-
-function queueTempPasswordEmail(payload) {
-  try {
-    const raw = localStorage.getItem(TEMP_PASSWORD_QUEUE_KEY);
-    const queue = raw ? JSON.parse(raw) : [];
-    const nextQueue = Array.isArray(queue) ? queue : [];
-    nextQueue.unshift({
-      ...payload,
-      createdAt: new Date().toISOString()
-    });
-    localStorage.setItem(TEMP_PASSWORD_QUEUE_KEY, JSON.stringify(nextQueue.slice(0, 50)));
-  } catch (err) {
-    // ignore storage errors
-  }
-}
-
-function generateTempPassword() {
-  const code = Math.random().toString(36).slice(2, 6).toUpperCase();
-  const suffix = Math.floor(100 + Math.random() * 900);
-  return `HS-${code}${suffix}`;
-}
-
-function getStoredRole() {
-  try {
-    const stored = localStorage.getItem('hs_role');
-    if (stored && ROLE_CONFIGS[stored]) {
-      return stored;
-    }
-  } catch (err) {
-    // ignore storage errors
-  }
-  return 'admin';
-}
-
-function storeRole(role) {
-  try {
-    localStorage.setItem('hs_role', role);
-  } catch (err) {
-    // ignore storage errors
-  }
+function getSchedulingPathForCurrentRole() {
+  const normalized = normalizePath(window.location.hash || '');
+  const segments = normalized.replace(/^\/+/, '').split('/').filter(Boolean);
+  const role = ROLE_CONFIGS[segments[0]] ? segments[0] : 'admin';
+  return `${ROLE_CONFIGS[role].basePath}/scheduling`;
 }
 
 function normalizePath(value) {
@@ -727,106 +843,1433 @@ function useHashPath() {
   return [path, navigate];
 }
 
-function parseRoute(path) {
-  const storedRole = getStoredRole();
+function parseRoute(path, role) {
   const normalized = normalizePath(path);
-  const segments = normalized.replace(/^\/+/, '').split('/').filter(Boolean);
+  const hasActiveRole = Boolean(role && ROLE_CONFIGS[role]);
+  const activeRole = hasActiveRole ? role : 'admin';
+  const activeConfig = ROLE_CONFIGS[activeRole] || ROLE_CONFIGS.admin;
 
-  if (segments[0] === 'login') {
-    const config = ROLE_CONFIGS[storedRole] || ROLE_CONFIGS.admin;
+  if (normalized === LOGIN_PATH) {
+    if (hasActiveRole) {
+      return {
+        role: activeRole,
+        page: activeConfig.defaultRoute,
+        config: activeConfig,
+        canonicalPath: `${activeConfig.basePath}/${activeConfig.defaultRoute}`
+      };
+    }
     return {
-      role: storedRole,
-      page: config.defaultRoute,
-      config,
-      canonicalPath: '/login',
-      view: 'login'
+      role: null,
+      page: 'login',
+      config: null,
+      canonicalPath: LOGIN_PATH
+    };
+  }
+  if (normalized === SETUP_PASSWORD_PATH) {
+    return {
+      role: null,
+      page: 'setup-password',
+      config: null,
+      canonicalPath: SETUP_PASSWORD_PATH
     };
   }
 
-  let role = segments[0] || storedRole;
-  if (!ROLE_CONFIGS[role]) {
-    role = storedRole;
-  }
-
-  const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.admin;
-  const routeMap = ROUTES[role] || ROUTES.admin;
-  let page = segments[1] || config.defaultRoute;
+  const segments = normalized.replace(/^\/+/, '').split('/').filter(Boolean);
+  const config = ROLE_CONFIGS[activeRole] || ROLE_CONFIGS.admin;
+  const routeMap = ROUTES[activeRole] || ROUTES.admin;
+  const rolePrefix = segments[0];
+  let page = rolePrefix === activeRole ? segments[1] : config.defaultRoute;
 
   if (!routeMap[page]) {
     page = config.defaultRoute;
   }
 
   return {
-    role,
+    role: activeRole,
     page,
     config,
-    canonicalPath: `${config.basePath}/${page}`,
-    view: 'app'
+    canonicalPath: `${config.basePath}/${page}`
   };
 }
 
 function DashboardPage() {
-  const maxRevenue = Math.max(
-    ...MONTHLY_REVENUE_SERIES.map((entry) => Math.max(entry.scheduled, entry.collected))
-  );
+  const [enabled] = useState(true);
+  const { loading, error, summary, upcoming, recent } = useDashboardData(enabled);
 
-  const recentlyCompleted = [
+  const stats = [
     {
-      memorial: 'Johnson Headstone',
-      cemetery: 'Elmwood Cemetery',
-      completedOn: '09/12/23',
-      amount: '$180.00',
-      photoStatus: 'Ready for review',
-      invoiceStatus: 'Invoice draft'
+      label: 'Total Revenue',
+      value: summary ? formatCurrency(summary.total_revenue || 0) : '—',
+      sub: summary ? 'Completed jobs only' : 'Awaiting data'
     },
     {
-      memorial: 'Carter Memorial',
-      cemetery: 'Rolling Hills',
-      completedOn: '09/23/23',
-      amount: '$160.00',
-      photoStatus: 'Approved',
-      invoiceStatus: 'Sent'
+      label: 'Projected Revenue',
+      value: summary ? formatCurrency(summary.projected_revenue || 0) : '—',
+      sub: summary ? 'Scheduled, not completed' : 'Awaiting data'
+    },
+    {
+      label: 'Active Services',
+      value: summary?.active_services ?? '—',
+      sub: summary ? `${summary.services_today} scheduled today` : 'Awaiting data'
+    },
+    {
+      label: 'Completion Rate',
+      value: summary ? formatPercent(summary.completion_rate || 0) : '—',
+      sub: summary ? 'Last 30 days' : 'Awaiting data'
     }
   ];
 
-  const pipelineStages = [
-    'Customer intake call',
-    'Quote drafted and approved',
-    'Pre-work forms and permissions',
-    'Service scheduled',
-    'Work performed and quality-checked',
-    'Billing collected and closeout',
-    'Annual care follow-up'
-  ];
+  const upcomingServices = (upcoming && upcoming.length)
+    ? upcoming.map((svc) => ({
+      id: svc.id,
+      title: svc.memorial_name || `Service #${svc.id}`,
+      cemetery: svc.cemetery_name || 'Scheduled location',
+      meta: `${formatDateTimeShort(svc.scheduled_start)} · ${svc.status_display || svc.status || 'Scheduled'}`
+    }))
+    : [];
+
+  function handleViewCalendar() {
+    window.location.hash = getSchedulingPathForCurrentRole();
+  }
 
   return (
     <>
       <h1 className="page-title">Dashboard</h1>
-      <p className="page-subtitle">Overview of revenue, pipeline progress, and scheduling health.</p>
+      <p className="page-subtitle">Overview of restoration activity, revenue, and scheduling.</p>
+
+      {enabled && error && <div className="card warn">Backend error: {error}</div>}
+
+      <section className="kpis">
+        {stats.map((stat) => (
+          <div key={stat.label} className="kpi">
+            <span className="kpi-label">{stat.label}</span>
+            <strong>{stat.value}</strong>
+            <small className={stat.label.includes('Revenue') ? 'positive' : ''}>{stat.sub}</small>
+          </div>
+        ))}
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Upcoming Services</h3>
+            <button className="ghost-btn" type="button" onClick={handleViewCalendar}>View Calendar</button>
+          </div>
+
+          {loading && <p className="meta">Loading from backend...</p>}
+          {!loading && upcomingServices.length === 0 && <p className="meta">No upcoming services scheduled.</p>}
+          {!loading && upcomingServices.length > 0 && (
+            <ul className="service-list">
+              {upcomingServices.map((svc) => (
+                <li key={svc.id}>
+                  <strong>{svc.title}</strong>
+                  <span>{svc.cemetery}</span>
+                  <div className="meta">{svc.meta}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>Monthly Revenue</h3>
+          <div className="chart-placeholder">Connect chart component</div>
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <h3>Recently Completed</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Memorial</th>
+                <th>Cemetery</th>
+                <th>Date</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+          <tbody>
+            {loading && <tr><td colSpan="4" className="meta">Loading...</td></tr>}
+            {!loading && recent.length === 0 && <tr><td colSpan="4" className="meta">No completed services yet.</td></tr>}
+            {!loading && recent.map((svc) => (
+              <tr key={svc.id}>
+                <td>{svc.memorial_name}</td>
+                <td>{svc.cemetery_name || '—'}</td>
+                <td>{svc.completed_date || '—'}</td>
+                <td>{svc.amount != null ? formatCurrency(Number(svc.amount)) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+          </table>
+        </div>
+
+        <div className="card">
+          <h3>Photo Archive Status</h3>
+          <p className="meta">No photo metrics yet. Connect a photos endpoint to show status.</p>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function MemorialsPage() {
+  const { loading, error, data } = useApi('/memorials/', []);
+
+  return (
+    <>
+      <h1 className="page-title">Memorials</h1>
+      <p className="page-subtitle">Permanent records of restored and maintained memorials.</p>
+
+      {error && <div className="card warn">Backend error: {error}</div>}
+
+      <div className="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Cemetery</th>
+              <th>Last Service</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr><td colSpan="4" className="meta">Loading...</td></tr>
+            )}
+            {!loading && data.length === 0 && (
+              <tr><td colSpan="4" className="meta">No memorials yet.</td></tr>
+            )}
+            {!loading && data.map((row) => (
+              <tr key={row.id}>
+                <td>{row.customer}</td>
+                <td>{row.cemetery || '—'}</td>
+                <td>{row.last_service_date || '—'}</td>
+                <td><span className="tag">{row.last_service_status || 'N/A'}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function SchedulingPage() {
+  const servicesState = useApi('/scheduling/services/', []);
+  const techState = useApi('/technicians/', []);
+  const memorialState = useApi('/memorials/', []);
+  const serviceOptionsState = useApi('/service-options/', [], true, { refreshEvent: 'hs:service-options-updated' });
+
+  const [services, setServices] = useState([]);
+  const [showCreateJobWindow, setShowCreateJobWindow] = useState(false);
+  const [selectedServiceId, setSelectedServiceId] = useState('');
+  const [technicianId, setTechnicianId] = useState('');
+  const [scheduledStart, setScheduledStart] = useState('');
+  const [estimatedMinutes, setEstimatedMinutes] = useState('90');
+  const [calendarDate, setCalendarDate] = useState(getStoredSchedulingDate);
+  const [submitState, setSubmitState] = useState({ loading: false, error: '', success: '' });
+  const [completeState, setCompleteState] = useState({ loading: false, error: '', success: '' });
+  const [createMemorialId, setCreateMemorialId] = useState('');
+  const [createServiceOptionId, setCreateServiceOptionId] = useState('');
+  const [createInitialPrice, setCreateInitialPrice] = useState('');
+  const [createGpsLat, setCreateGpsLat] = useState('');
+  const [createGpsLng, setCreateGpsLng] = useState('');
+  const [createState, setCreateState] = useState({ loading: false, error: '', success: '' });
+
+  useEffect(() => {
+    setServices(Array.isArray(servicesState.data) ? servicesState.data : []);
+  }, [servicesState.data]);
+
+  useEffect(() => {
+    const options = Array.isArray(serviceOptionsState.data) ? serviceOptionsState.data : [];
+    if (!options.length || createServiceOptionId) return;
+    setCreateServiceOptionId(String(options[0].id));
+  }, [serviceOptionsState.data, createServiceOptionId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SCHEDULING_DATE_KEY, calendarDate);
+    } catch (err) {
+      // ignore storage errors
+    }
+  }, [calendarDate]);
+
+  const selectedService = useMemo(
+    () => services.find((s) => String(s.id) === String(selectedServiceId)) || null,
+    [services, selectedServiceId]
+  );
+
+  useEffect(() => {
+    if (!services.length) return;
+    if (selectedServiceId && selectedService) return;
+
+    const preferred = services.find((s) => !s.technician_id || s.status === 'draft') || services[0];
+    setSelectedServiceId(String(preferred.id));
+    setTechnicianId(preferred.technician_id ? String(preferred.technician_id) : '');
+    setScheduledStart(toDatetimeLocalInput(preferred.scheduled_start));
+    setEstimatedMinutes(preferred.estimated_minutes ? String(preferred.estimated_minutes) : '90');
+  }, [services, selectedServiceId, selectedService]);
+
+  useEffect(() => {
+    if (!services.length) return;
+    const hasAnyOnSelectedDate = services.some(
+      (svc) => svc.scheduled_start && toDateInputValue(svc.scheduled_start) === calendarDate
+    );
+    if (hasAnyOnSelectedDate) return;
+
+    const firstScheduled = services.find((svc) => Boolean(svc.scheduled_start));
+    if (firstScheduled) {
+      setCalendarDate(toDateInputValue(firstScheduled.scheduled_start));
+    }
+  }, [services, calendarDate]);
+
+  function syncFormFromService(serviceId, options = {}) {
+    const svc = services.find((item) => String(item.id) === String(serviceId));
+    if (!svc) return;
+    setSelectedServiceId(String(svc.id));
+    setTechnicianId(svc.technician_id ? String(svc.technician_id) : '');
+    setScheduledStart(toDatetimeLocalInput(svc.scheduled_start));
+    setEstimatedMinutes(svc.estimated_minutes ? String(svc.estimated_minutes) : '90');
+    if (options.resetState !== false) {
+      setSubmitState({ loading: false, error: '', success: '' });
+      setCompleteState({ loading: false, error: '', success: '' });
+    }
+  }
+
+  function resetCreateForm() {
+    setCreateMemorialId('');
+    setCreateServiceOptionId('');
+    setCreateInitialPrice('');
+    setCreateGpsLat('');
+    setCreateGpsLng('');
+    setCreateState({ loading: false, error: '', success: '' });
+  }
+
+  async function handleAssign(event) {
+    event.preventDefault();
+    setSubmitState({ loading: true, error: '', success: '' });
+
+    if (!selectedServiceId) {
+      setSubmitState({ loading: false, error: 'Select a job to schedule.', success: '' });
+      return;
+    }
+    if (!technicianId) {
+      setSubmitState({ loading: false, error: 'Select a technician.', success: '' });
+      return;
+    }
+    if (!scheduledStart) {
+      setSubmitState({ loading: false, error: 'Pick a scheduled start time.', success: '' });
+      return;
+    }
+
+    const payload = {
+      technician_id: Number(technicianId),
+      scheduled_start: datetimeLocalToIso(scheduledStart),
+      estimated_minutes: Number(estimatedMinutes) || 90
+    };
+
+    try {
+      const res = await apiFetch(`/manager/services/${selectedServiceId}/assign/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (error) {
+          payload = await res.text();
+        }
+        throw new Error(formatApiError(payload, `Assign failed (${res.status})`));
+      }
+      const json = await res.json();
+      if (json.service) {
+        setServices((prev) => prev.map((item) => (item.id === json.service.id ? json.service : item)));
+        setCalendarDate(toDateInputValue(json.service.scheduled_start || new Date()));
+      }
+      window.dispatchEvent(new Event('hs:schedule-updated'));
+      setSubmitState({ loading: false, error: '', success: 'Technician assigned.' });
+    } catch (err) {
+      setSubmitState({ loading: false, error: err.message || 'Failed to save schedule.', success: '' });
+    }
+  }
+
+  async function handleCreateJob(event) {
+    event.preventDefault();
+    setCreateState({ loading: true, error: '', success: '' });
+    if (!createMemorialId) {
+      setCreateState({ loading: false, error: 'Select a memorial.', success: '' });
+      return;
+    }
+    if (!createServiceOptionId) {
+      setCreateState({ loading: false, error: 'Select a service.', success: '' });
+      return;
+    }
+    const createPriceValue = createInitialPrice.trim();
+    let initialPrice = null;
+    if (createPriceValue) {
+      const parsed = Number(createPriceValue);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setCreateState({ loading: false, error: 'Enter a valid non-negative initial price.', success: '' });
+        return;
+      }
+      initialPrice = Number(parsed.toFixed(2));
+    }
+    const latValue = createGpsLat.trim();
+    const lngValue = createGpsLng.trim();
+    if ((latValue && !lngValue) || (!latValue && lngValue)) {
+      setCreateState({ loading: false, error: 'Enter both GPS fields or leave both blank.', success: '' });
+      return;
+    }
+    let gpsLat = null;
+    let gpsLng = null;
+    if (latValue && lngValue) {
+      const parsedLat = parseCoordinate(latValue, 'lat');
+      const parsedLng = parseCoordinate(lngValue, 'lng');
+      if (!parsedLat.ok || !parsedLng.ok) {
+        setCreateState({
+          loading: false,
+          error: parsedLat.error || parsedLng.error || 'Invalid GPS coordinates.',
+          success: ''
+        });
+        return;
+      }
+      gpsLat = parsedLat.value;
+      gpsLng = parsedLng.value;
+    }
+
+    try {
+      const res = await apiFetch('/scheduling/services/create/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memorial_id: Number(createMemorialId),
+          service_option_id: Number(createServiceOptionId),
+          initial_price: initialPrice,
+          gps_lat: gpsLat,
+          gps_lng: gpsLng
+        })
+      });
+      if (!res.ok) {
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (error) {
+          payload = await res.text();
+        }
+        throw new Error(formatApiError(payload, `Create failed (${res.status})`));
+      }
+      const json = await res.json();
+      if (json.service) {
+        setServices((prev) => [json.service, ...prev]);
+        syncFormFromService(json.service.id);
+      }
+      resetCreateForm();
+      setShowCreateJobWindow(false);
+      setCreateState({ loading: false, error: '', success: 'Job created. It is ready for later assignment.' });
+    } catch (err) {
+      setCreateState({ loading: false, error: err.message || 'Failed to create job.', success: '' });
+    }
+  }
+
+  async function handleMarkComplete() {
+    if (!selectedServiceId) {
+      setCompleteState({ loading: false, error: 'Select a job first.', success: '' });
+      return;
+    }
+
+    setCompleteState({ loading: true, error: '', success: '' });
+    try {
+      const res = await apiFetch(`/manager/services/${selectedServiceId}/complete/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) {
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (error) {
+          payload = await res.text();
+        }
+        throw new Error(formatApiError(payload, `Complete failed (${res.status})`));
+      }
+      const json = await res.json();
+      setServices((prev) => prev.filter((item) => item.id !== Number(selectedServiceId)));
+      setSelectedServiceId('');
+      setTechnicianId('');
+      setScheduledStart('');
+      setEstimatedMinutes('90');
+      window.dispatchEvent(new Event('hs:schedule-updated'));
+      setCompleteState({
+        loading: false,
+        error: '',
+        success: `${getServiceTypeLabel(json.service)} marked complete.`
+      });
+    } catch (err) {
+      setCompleteState({ loading: false, error: err.message || 'Failed to complete job.', success: '' });
+    }
+  }
+
+  const scheduledForDay = useMemo(() => {
+    return services
+      .filter((svc) => svc.scheduled_start && toDateInputValue(svc.scheduled_start) === calendarDate)
+      .sort((a, b) => new Date(a.scheduled_start) - new Date(b.scheduled_start));
+  }, [services, calendarDate]);
+
+  const unassignedServices = useMemo(
+    () => services.filter((svc) => !svc.technician_id || svc.status === 'draft'),
+    [services]
+  );
+
+  const schedulableServices = useMemo(
+    () => services.filter((svc) => svc.status !== 'completed'),
+    [services]
+  );
+
+  const assignedServices = useMemo(
+    () => services.filter((svc) => Boolean(svc.technician_id) && svc.status !== 'draft'),
+    [services]
+  );
+
+  useEffect(() => {
+    if (!selectedServiceId || !schedulableServices.length) return;
+    const stillSchedulable = schedulableServices.some((svc) => String(svc.id) === String(selectedServiceId));
+    if (!stillSchedulable) {
+      syncFormFromService(schedulableServices[0].id, { resetState: false });
+    }
+  }, [selectedServiceId, schedulableServices]);
+
+  return (
+    <>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Scheduling</h1>
+          <p className="page-subtitle">Create jobs first, then assign technicians when the schedule is ready.</p>
+        </div>
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => {
+            setShowCreateJobWindow(true);
+            setCreateState({ loading: false, error: '', success: '' });
+          }}
+        >
+          New Job
+        </button>
+      </div>
+
+      {(servicesState.error || techState.error || memorialState.error || serviceOptionsState.error) && (
+        <div className="card warn">
+          Backend error: {servicesState.error || techState.error || memorialState.error || serviceOptionsState.error}
+        </div>
+      )}
 
       <section className="kpis">
         <div className="kpi">
-          <span className="kpi-label">Yearly Revenue Total</span>
-          <strong>$141,240</strong>
-          <small className="positive">+14% vs last year</small>
+          <span className="kpi-label">Jobs Loaded</span>
+          <strong>{services.length}</strong>
+          <small>{servicesState.loading ? 'Loading...' : 'From scheduling API'}</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Unassigned</span>
+          <strong>{unassignedServices.length}</strong>
+          <small>Waiting for technician assignment</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Technicians</span>
+          <strong>{Array.isArray(techState.data) ? techState.data.length : 0}</strong>
+          <small>Active tech accounts</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Calendar Date</span>
+          <strong>{calendarDate || '—'}</strong>
+          <small>{scheduledForDay.length} jobs on selected day</small>
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Calendar</h3>
+            <input
+              type="date"
+              value={calendarDate}
+              onChange={(event) => setCalendarDate(event.target.value)}
+            />
+          </div>
+          <SchedulingCalendar
+            services={services}
+            calendarDate={calendarDate}
+            onDateChange={setCalendarDate}
+            onSelectService={syncFormFromService}
+            selectedServiceId={selectedServiceId}
+          />
+          {scheduledForDay.length === 0 && <p className="meta">No jobs scheduled for this date.</p>}
+          {scheduledForDay.length > 0 && (
+            <ul className="service-list scheduling-agenda">
+              {scheduledForDay.map((svc) => (
+                <li
+                  key={svc.id}
+                  className={String(selectedServiceId) === String(svc.id) ? 'selected' : ''}
+                  onClick={() => syncFormFromService(svc.id)}
+                >
+                  <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                  <span>{svc.cemetery_name || 'No cemetery'}</span>
+                  <div className="meta">
+                    {getServiceTypeLabel(svc)} · {formatDateTimeShort(svc.scheduled_start)} · {svc.technician_name || 'Unassigned'} · {svc.estimated_minutes || 0} min
+                    {svc.price != null ? ` · ${formatCurrency(Number(svc.price))}` : ''}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
-        <div className="kpi">
-          <span className="kpi-label">Monthly Revenue Change</span>
-          <strong>+$8,450</strong>
-          <small className="positive">+5.8% vs previous month</small>
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3>Unassigned Jobs</h3>
+              <p className="meta">Create now, assign later. Draft jobs stay here until a technician is scheduled.</p>
+            </div>
+          </div>
+          {unassignedServices.length === 0 && <p className="meta">No unassigned jobs right now.</p>}
+          {unassignedServices.length > 0 && (
+            <ul className="service-list scheduling-agenda">
+              {unassignedServices.map((svc) => (
+                <li
+                  key={svc.id}
+                  className={String(selectedServiceId) === String(svc.id) ? 'selected' : ''}
+                  onClick={() => syncFormFromService(svc.id)}
+                >
+                  <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                  <span>{svc.cemetery_name || 'No cemetery'}</span>
+                  <div className="meta">
+                    {getServiceTypeLabel(svc)} · #{svc.id} · {svc.price != null ? formatCurrency(Number(svc.price)) : 'No price yet'} · {svc.gps_lat != null && svc.gps_lng != null ? `${svc.gps_lat}, ${svc.gps_lng}` : 'GPS pending'}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3>Assign Technician</h3>
+              <p className="meta">Use this to assign or reassign a technician, update the start time, or change the duration.</p>
+            </div>
+          </div>
+          {selectedService && (
+            <div className="job-detail-summary">
+              <strong>{selectedService.memorial_name || `Service #${selectedService.id}`}</strong>
+              <span>{selectedService.cemetery_name || 'No cemetery listed'}</span>
+              <div className="meta">
+                {getServiceTypeLabel(selectedService)} · Status: {selectedService.status || 'draft'} · Price: {selectedService.price != null ? formatCurrency(Number(selectedService.price)) : '—'} · GPS: {selectedService.gps_lat != null && selectedService.gps_lng != null ? `${selectedService.gps_lat}, ${selectedService.gps_lng}` : '—'}
+              </div>
+            </div>
+          )}
+          <form className="form" onSubmit={handleAssign}>
+            <label>Job</label>
+            <select
+              value={selectedServiceId}
+              onChange={(event) => syncFormFromService(event.target.value)}
+              required
+            >
+              <option value="">Select a job</option>
+              {schedulableServices.map((svc) => (
+                <option key={svc.id} value={svc.id}>
+                  #{svc.id} · {getServiceTypeLabel(svc)} · {svc.memorial_name || 'Memorial'} · {svc.technician_name || 'Unassigned'}
+                </option>
+              ))}
+            </select>
+
+            <label>Technician</label>
+            <select
+              value={technicianId}
+              onChange={(event) => setTechnicianId(event.target.value)}
+              required
+            >
+              <option value="">Select technician</option>
+              {(techState.data || []).map((tech) => (
+                <option key={tech.id} value={tech.id}>{tech.full_name}</option>
+              ))}
+            </select>
+
+            <label>Start Time</label>
+            <input
+              type="datetime-local"
+              value={scheduledStart}
+              onChange={(event) => setScheduledStart(event.target.value)}
+              required
+            />
+
+            <label>Estimated Minutes</label>
+            <input
+              type="number"
+              min="1"
+              max="1440"
+              value={estimatedMinutes}
+              onChange={(event) => setEstimatedMinutes(event.target.value)}
+              required
+            />
+
+            {submitState.error && <div className="form-error">{submitState.error}</div>}
+            {submitState.success && <div className="card form-success"><strong>{submitState.success}</strong></div>}
+            {completeState.error && <div className="form-error">{completeState.error}</div>}
+            {completeState.success && <div className="card form-success"><strong>{completeState.success}</strong></div>}
+            <button className="primary-btn" type="submit" disabled={submitState.loading}>
+              {submitState.loading ? 'Saving...' : selectedService?.technician_id ? 'Save Assignment' : 'Assign Technician'}
+            </button>
+            {selectedService && selectedService.status !== 'completed' && (
+              <button
+                className="ghost-btn"
+                type="button"
+                onClick={handleMarkComplete}
+                disabled={completeState.loading}
+              >
+                {completeState.loading ? 'Completing...' : 'Mark Complete'}
+              </button>
+            )}
+          </form>
         </div>
 
-        <div className="kpi">
-          <span className="kpi-label">Crews Active</span>
-          <strong>5</strong>
-          <small>Currently in field</small>
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3>Assigned Jobs</h3>
+              <p className="meta">Scheduled jobs with technicians already attached.</p>
+            </div>
+          </div>
+          {assignedServices.length === 0 && <p className="meta">No assigned jobs yet.</p>}
+          {assignedServices.length > 0 && (
+            <ul className="service-list scheduling-agenda">
+              {assignedServices
+                .sort((a, b) => {
+                  const aTime = a.scheduled_start ? new Date(a.scheduled_start).getTime() : Number.MAX_SAFE_INTEGER;
+                  const bTime = b.scheduled_start ? new Date(b.scheduled_start).getTime() : Number.MAX_SAFE_INTEGER;
+                  return aTime - bTime;
+                })
+                .map((svc) => (
+                  <li
+                    key={svc.id}
+                    className={String(selectedServiceId) === String(svc.id) ? 'selected' : ''}
+                    onClick={() => syncFormFromService(svc.id)}
+                  >
+                    <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                    <span>{svc.technician_name || 'No technician'}</span>
+                    <div className="meta">
+                      {getServiceTypeLabel(svc)} · {formatDateTimeShort(svc.scheduled_start)} · {svc.estimated_minutes || 0} min
+                    </div>
+                  </li>
+                ))}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      <div className="card">
+        <h3>All Jobs</h3>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Service</th>
+                <th>Memorial</th>
+                <th>Cemetery</th>
+                <th>Status</th>
+                <th>When</th>
+                <th>Technician</th>
+                <th>Price</th>
+                <th>GPS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {servicesState.loading && (
+                <tr><td colSpan="9" className="meta">Loading jobs...</td></tr>
+              )}
+              {!servicesState.loading && services.length === 0 && (
+                <tr><td colSpan="9" className="meta">No jobs found yet.</td></tr>
+              )}
+              {!servicesState.loading && services.map((svc) => (
+                <tr
+                  key={svc.id}
+                  className="clickable-row"
+                  onClick={() => syncFormFromService(svc.id)}
+                >
+                  <td>#{svc.id}</td>
+                  <td>{getServiceTypeLabel(svc)}</td>
+                  <td>{svc.memorial_name || '—'}</td>
+                  <td>{svc.cemetery_name || '—'}</td>
+                  <td><span className="tag">{svc.status || '—'}</span></td>
+                  <td>{formatDateTimeShort(svc.scheduled_start)}</td>
+                  <td>{svc.technician_name || 'Unassigned'}</td>
+                  <td>{svc.price != null ? formatCurrency(Number(svc.price)) : '—'}</td>
+                  <td>
+                    {svc.gps_lat != null && svc.gps_lng != null
+                      ? `${svc.gps_lat}, ${svc.gps_lng}`
+                      : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {createState.success && <div className="card form-success"><strong>{createState.success}</strong></div>}
+
+      {showCreateJobWindow && (
+        <div className="panel-overlay" onClick={() => {
+          resetCreateForm();
+          setShowCreateJobWindow(false);
+        }}>
+          <div className="panel-window" onClick={(event) => event.stopPropagation()}>
+            <div className="card-header">
+              <div>
+                <h3>Create Job</h3>
+                <p className="meta">Capture the core service info now. Assignment happens later.</p>
+              </div>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => {
+                  resetCreateForm();
+                  setShowCreateJobWindow(false);
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <form className="form" onSubmit={handleCreateJob}>
+              <label>Memorial</label>
+              <select
+                value={createMemorialId}
+                onChange={(event) => setCreateMemorialId(event.target.value)}
+                required
+              >
+                <option value="">Select memorial</option>
+                {(memorialState.data || []).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    #{m.id} · {m.customer || 'Customer'} · {m.cemetery || 'Cemetery'}
+                  </option>
+                ))}
+              </select>
+
+              <label>Service</label>
+              <select
+                value={createServiceOptionId}
+                onChange={(event) => setCreateServiceOptionId(event.target.value)}
+                required
+              >
+                <option value="">Select service</option>
+                {(serviceOptionsState.data || []).map((opt) => (
+                  <option key={opt.id} value={opt.id}>{opt.name}</option>
+                ))}
+              </select>
+              {!serviceOptionsState.loading && (!serviceOptionsState.data || serviceOptionsState.data.length === 0) && (
+                <p className="meta">No services are configured yet. Add them in Admin Settings.</p>
+              )}
+
+              <label>Initial Price (USD)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={createInitialPrice}
+                onChange={(event) => setCreateInitialPrice(event.target.value)}
+                placeholder="Optional"
+              />
+
+              <div className="field-row">
+                <div>
+                  <label>GPS Latitude</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 40.730610"
+                    value={createGpsLat}
+                    onChange={(event) => setCreateGpsLat(event.target.value)}
+                  />
+                </div>
+                <div>
+                  <label>GPS Longitude</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. -73.935242"
+                    value={createGpsLng}
+                    onChange={(event) => setCreateGpsLng(event.target.value)}
+                  />
+                </div>
+              </div>
+              <p className="meta">Leave both GPS fields blank if the location is not available yet.</p>
+
+              {createState.error && <div className="form-error">{createState.error}</div>}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => {
+                    resetCreateForm();
+                    setShowCreateJobWindow(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button className="primary-btn" type="submit" disabled={createState.loading || memorialState.loading}>
+                  {createState.loading ? 'Creating...' : 'Create Job'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function UsersAdminPage() {
+  const employeesState = useApi('/manage/employees/', []);
+  const [employees, setEmployees] = useState([]);
+  const [usernameDrafts, setUsernameDrafts] = useState({});
+  const [nameDrafts, setNameDrafts] = useState({});
+  const [emailDrafts, setEmailDrafts] = useState({});
+  const [phoneDrafts, setPhoneDrafts] = useState({});
+  const [roleDrafts, setRoleDrafts] = useState({});
+  const [activeDrafts, setActiveDrafts] = useState({});
+  const [createForm, setCreateForm] = useState({
+    username: '',
+    full_name: '',
+    email: '',
+    phone: '',
+    role: 'tech'
+  });
+  const [createState, setCreateState] = useState({ loading: false, error: '', success: '' });
+  const [updateState, setUpdateState] = useState({ loadingId: null, error: '', success: '' });
+
+  useEffect(() => {
+    const rows = Array.isArray(employeesState.data) ? employeesState.data : [];
+    setEmployees(rows);
+    const nextUsernames = {};
+    const nextNames = {};
+    const nextEmails = {};
+    const nextPhones = {};
+    const nextRoles = {};
+    const nextActive = {};
+    rows.forEach((row) => {
+      nextUsernames[row.id] = row.username || '';
+      nextNames[row.id] = row.full_name || '';
+      nextEmails[row.id] = row.email || '';
+      nextPhones[row.id] = row.phone || '';
+      nextRoles[row.id] = row.role;
+      nextActive[row.id] = Boolean(row.is_active);
+    });
+    setUsernameDrafts(nextUsernames);
+    setNameDrafts(nextNames);
+    setEmailDrafts(nextEmails);
+    setPhoneDrafts(nextPhones);
+    setRoleDrafts(nextRoles);
+    setActiveDrafts(nextActive);
+  }, [employeesState.data]);
+
+  async function handleCreate(event) {
+    event.preventDefault();
+    setCreateState({ loading: true, error: '', success: '' });
+    try {
+      const res = await apiFetch('/manage/employees/create/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createForm)
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(JSON.stringify(json));
+      setEmployees((prev) => [...prev, json.employee].sort((a, b) => a.full_name.localeCompare(b.full_name)));
+      setCreateForm({ username: '', full_name: '', email: '', phone: '', role: 'tech' });
+      setCreateState({
+        loading: false,
+        error: '',
+        success: `Invite sent to ${json.employee.email || json.invite?.invited_email || 'employee email'}.`
+      });
+    } catch (err) {
+      setCreateState({ loading: false, error: err.message || 'Failed to create user.', success: '' });
+    }
+  }
+
+  async function handleSaveRole(employeeId) {
+    setUpdateState({ loadingId: employeeId, error: '', success: '' });
+    try {
+      const payload = {
+        username: usernameDrafts[employeeId],
+        full_name: nameDrafts[employeeId],
+        email: emailDrafts[employeeId],
+        phone: phoneDrafts[employeeId],
+        role: roleDrafts[employeeId],
+        is_active: Boolean(activeDrafts[employeeId])
+      };
+      const res = await apiFetch(`/manage/employees/${employeeId}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(JSON.stringify(json));
+      setEmployees((prev) => prev.map((e) => (e.id === employeeId ? json.employee : e)));
+      setUsernameDrafts((prev) => ({ ...prev, [employeeId]: json.employee.username || '' }));
+      setNameDrafts((prev) => ({ ...prev, [employeeId]: json.employee.full_name || '' }));
+      setEmailDrafts((prev) => ({ ...prev, [employeeId]: json.employee.email || '' }));
+      setPhoneDrafts((prev) => ({ ...prev, [employeeId]: json.employee.phone || '' }));
+      setUpdateState({ loadingId: null, error: '', success: 'User updated.' });
+    } catch (err) {
+      setUpdateState({ loadingId: null, error: err.message || 'Failed to update user.', success: '' });
+    }
+  }
+
+  return (
+    <>
+      <h1 className="page-title">Users & Roles</h1>
+      <p className="page-subtitle">Manage staff accounts and role assignments.</p>
+
+      {employeesState.error && <div className="card warn">Backend error: {employeesState.error}</div>}
+
+      <section className="grid-2">
+        <div className="card">
+          <h3>Invite Staff User</h3>
+          <form className="form" onSubmit={handleCreate}>
+            <label>Username</label>
+            <input value={createForm.username} onChange={(e) => setCreateForm((p) => ({ ...p, username: e.target.value }))} required />
+            <label>Full Name</label>
+            <input value={createForm.full_name} onChange={(e) => setCreateForm((p) => ({ ...p, full_name: e.target.value }))} required />
+            <label>Email</label>
+            <input type="email" value={createForm.email} onChange={(e) => setCreateForm((p) => ({ ...p, email: e.target.value }))} required />
+            <label>Phone</label>
+            <input value={createForm.phone} onChange={(e) => setCreateForm((p) => ({ ...p, phone: e.target.value }))} />
+            <label>Role</label>
+            <select value={createForm.role} onChange={(e) => setCreateForm((p) => ({ ...p, role: e.target.value }))}>
+              <option value="admin">Admin</option>
+              <option value="front_desk">Front Desk</option>
+              <option value="manager">Manager</option>
+              <option value="tech">Technician</option>
+              <option value="other">Other</option>
+            </select>
+            {createState.error && <div className="form-error">{createState.error}</div>}
+            {createState.success && <div className="card form-success"><strong>{createState.success}</strong></div>}
+            <button className="primary-btn" type="submit" disabled={createState.loading}>
+              {createState.loading ? 'Sending Invite...' : 'Send Invite'}
+            </button>
+          </form>
         </div>
 
+        <div className="card users-admin-card">
+          <h3>Existing Staff</h3>
+          {updateState.error && <div className="form-error">{updateState.error}</div>}
+          {updateState.success && <p className="meta">{updateState.success}</p>}
+          {employeesState.loading && <p className="meta">Loading staff...</p>}
+          {!employeesState.loading && employees.length === 0 && <p className="meta">No staff users yet.</p>}
+          {!employeesState.loading && employees.length > 0 && (
+            <div className="staff-editor-list">
+              {employees.map((row) => (
+                <section key={row.id} className="staff-editor-row">
+                  <div className="staff-editor-header">
+                    <div className="staff-editor-identity">
+                      <strong>{nameDrafts[row.id] || row.full_name || 'Staff user'}</strong>
+                      <div className="staff-editor-meta">
+                        <span>@{usernameDrafts[row.id] || row.username || 'username'}</span>
+                        <span className={`staff-status-pill${Boolean(activeDrafts[row.id]) ? ' is-active' : ''}`}>
+                          {Boolean(activeDrafts[row.id]) ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      className="ghost-btn"
+                      onClick={() => handleSaveRole(row.id)}
+                      disabled={updateState.loadingId === row.id}
+                    >
+                      {updateState.loadingId === row.id ? 'Saving...' : 'Update'}
+                    </button>
+                  </div>
+
+                  <div className="staff-editor-grid">
+                    <label className="staff-field">
+                      <span className="staff-field-label">Full Name</span>
+                      <input
+                        value={nameDrafts[row.id] || ''}
+                        onChange={(e) => setNameDrafts((p) => ({ ...p, [row.id]: e.target.value }))}
+                      />
+                    </label>
+
+                    <label className="staff-field">
+                      <span className="staff-field-label">Username</span>
+                      <input
+                        value={usernameDrafts[row.id] || ''}
+                        onChange={(e) => setUsernameDrafts((p) => ({ ...p, [row.id]: e.target.value }))}
+                      />
+                    </label>
+
+                    <label className="staff-field">
+                      <span className="staff-field-label">Email</span>
+                      <input
+                        type="email"
+                        value={emailDrafts[row.id] || ''}
+                        onChange={(e) => setEmailDrafts((p) => ({ ...p, [row.id]: e.target.value }))}
+                      />
+                    </label>
+
+                    <label className="staff-field">
+                      <span className="staff-field-label">Phone</span>
+                      <input
+                        value={phoneDrafts[row.id] || ''}
+                        onChange={(e) => setPhoneDrafts((p) => ({ ...p, [row.id]: e.target.value }))}
+                      />
+                    </label>
+
+                    <label className="staff-field">
+                      <span className="staff-field-label">Role</span>
+                      <select value={roleDrafts[row.id] || row.role} onChange={(e) => setRoleDrafts((p) => ({ ...p, [row.id]: e.target.value }))}>
+                        <option value="admin">Admin</option>
+                        <option value="front_desk">Front Desk</option>
+                        <option value="manager">Manager</option>
+                        <option value="tech">Technician</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+
+                    <label className="staff-field staff-active-toggle">
+                      <span className="staff-field-label">Account</span>
+                      <div className="staff-active-toggle-row">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(activeDrafts[row.id])}
+                          onChange={(e) => setActiveDrafts((p) => ({ ...p, [row.id]: e.target.checked }))}
+                        />
+                        <em>{Boolean(activeDrafts[row.id]) ? 'Enabled' : 'Disabled'}</em>
+                      </div>
+                    </label>
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function CustomersPage() {
+  const customerState = useApi('/manage/customers/', []);
+  const [customers, setCustomers] = useState([]);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState({ full_name: '', email: '', phone: '' });
+  const [saveState, setSaveState] = useState({ loading: false, error: '', success: '' });
+
+  useEffect(() => {
+    setCustomers(Array.isArray(customerState.data) ? customerState.data : []);
+  }, [customerState.data]);
+
+  function startCreate() {
+    setEditingId(null);
+    setForm({ full_name: '', email: '', phone: '' });
+    setSaveState({ loading: false, error: '', success: '' });
+  }
+
+  function startEdit(customer) {
+    setEditingId(customer.id);
+    setForm({ full_name: customer.full_name || '', email: customer.email || '', phone: customer.phone || '' });
+    setSaveState({ loading: false, error: '', success: '' });
+  }
+
+  async function handleSave(event) {
+    event.preventDefault();
+    setSaveState({ loading: true, error: '', success: '' });
+    try {
+      const isEdit = Boolean(editingId);
+      const res = await apiFetch(
+        isEdit ? `/manage/customers/${editingId}/` : '/manage/customers/',
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(form)
+        }
+      );
+      const json = await res.json();
+      if (!res.ok) throw new Error(JSON.stringify(json));
+      const payload = json.customer;
+      setCustomers((prev) => {
+        if (isEdit) return prev.map((c) => (c.id === payload.id ? { ...c, ...payload } : c));
+        return [...prev, payload].sort((a, b) => a.full_name.localeCompare(b.full_name));
+      });
+      setSaveState({ loading: false, error: '', success: isEdit ? 'Customer updated.' : 'Customer created.' });
+      if (!isEdit) startCreate();
+      window.dispatchEvent(new Event('hs:customers-updated'));
+    } catch (err) {
+      setSaveState({ loading: false, error: err.message || 'Failed to save customer.', success: '' });
+    }
+  }
+
+  async function handleDelete(customerId) {
+    const confirmDelete = window.confirm('Delete this customer?');
+    if (!confirmDelete) return;
+    setSaveState({ loading: true, error: '', success: '' });
+    try {
+      const res = await apiFetch(`/manage/customers/${customerId}/`, { method: 'DELETE' });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Delete failed (${res.status})`);
+      }
+      setCustomers((prev) => prev.filter((c) => c.id !== customerId));
+      if (editingId === customerId) startCreate();
+      setSaveState({ loading: false, error: '', success: 'Customer deleted.' });
+      window.dispatchEvent(new Event('hs:customers-updated'));
+    } catch (err) {
+      setSaveState({ loading: false, error: err.message || 'Failed to delete customer.', success: '' });
+    }
+  }
+
+  return (
+    <>
+      <h1 className="page-title">Customers</h1>
+      <p className="page-subtitle">Create, edit, and manage customer records.</p>
+
+      {customerState.error && <div className="card warn">Backend error: {customerState.error}</div>}
+
+      <section className="grid-2">
+        <div className="card">
+          <h3>{editingId ? `Edit Customer #${editingId}` : 'New Customer'}</h3>
+          <form className="form" onSubmit={handleSave}>
+            <label>Full Name</label>
+            <input value={form.full_name} onChange={(e) => setForm((p) => ({ ...p, full_name: e.target.value }))} required />
+            <label>Email</label>
+            <input type="email" value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} />
+            <label>Phone</label>
+            <input value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} />
+            {saveState.error && <div className="form-error">{saveState.error}</div>}
+            {saveState.success && <div className="card form-success"><strong>{saveState.success}</strong></div>}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className="primary-btn" type="submit" disabled={saveState.loading}>
+                {saveState.loading ? 'Saving...' : (editingId ? 'Update Customer' : 'Create Customer')}
+              </button>
+              <button className="ghost-btn" type="button" onClick={startCreate}>Clear</button>
+            </div>
+          </form>
+        </div>
+
+        <div className="card">
+          <h3>Customer List</h3>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Memorials</th>
+                  <th>Email</th>
+                  <th>Phone</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customerState.loading && <tr><td colSpan="5" className="meta">Loading...</td></tr>}
+                {!customerState.loading && customers.length === 0 && <tr><td colSpan="5" className="meta">No customers yet.</td></tr>}
+                {!customerState.loading && customers.map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.full_name}</td>
+                    <td>{c.memorials_count || 0}</td>
+                    <td>{c.email || '—'}</td>
+                    <td>{c.phone || '—'}</td>
+                    <td style={{ display: 'flex', gap: '6px' }}>
+                      <button className="ghost-btn" onClick={() => startEdit(c)}>Edit</button>
+                      <button className="ghost-btn" onClick={() => handleDelete(c.id)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function CemeteriesPage() {
+  const { loading, error, data } = useApi('/cemeteries/', []);
+
+  return (
+    <>
+      <h1 className="page-title">Cemeteries</h1>
+      <p className="page-subtitle">Service locations and memorial distribution.</p>
+
+      {error && <div className="card warn">Backend error: {error}</div>}
+
+      <div className="card">
+        <table>
+          <thead>
+            <tr>
+              <th>Cemetery</th>
+              <th>City</th>
+              <th>Memorials</th>
+              <th>Active Services</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan="4" className="meta">Loading...</td></tr>}
+            {!loading && data.length === 0 && <tr><td colSpan="4" className="meta">No cemeteries yet.</td></tr>}
+            {!loading && data.map((c) => (
+              <tr key={c.id}>
+                <td>{c.name}</td>
+                <td>{c.city || '—'}</td>
+                <td>{c.memorials_count || 0}</td>
+                <td>{c.active_services || 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function ArchivePage() {
+  const photosState = useApi('/photos/', [], true, { refreshEvent: 'hs:photos-updated' });
+  const photos = Array.isArray(photosState.data) ? photosState.data : [];
+
+  return (
+    <>
+      <h1 className="page-title">Photos & Archive</h1>
+      <p className="page-subtitle">Permanent visual records by memorial.</p>
+      {photosState.error && <div className="card warn">Backend error: {photosState.error}</div>}
+      <div className="card">
+        {photosState.loading && <p className="meta">Loading photos...</p>}
+        {!photosState.loading && photos.length === 0 && <p className="meta">No photos uploaded yet.</p>}
+        {!photosState.loading && photos.length > 0 && (
+          <div className="photo-grid">
+            {photos.map((photo) => (
+              <article key={photo.id} className="photo-card">
+                <div className="photo-card-media">
+                  <img className="photo-card-image" src={photo.image_url} alt={photo.caption || photo.job_title || 'Archive photo'} />
+                  <span className="photo-card-badge">{photo.photo_type_label}</span>
+                </div>
+                <div className="photo-card-body">
+                  <strong className="photo-card-title">{photo.job_title || `Service #${photo.service_id || photo.id}`}</strong>
+                  <span className="photo-card-subtitle">{photo.memorial_name || 'No memorial'}</span>
+                  <div className="photo-card-meta">{photo.cemetery_name || 'No cemetery'}</div>
+                  {photo.caption && <p className="photo-card-caption">{photo.caption}</p>}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ReportsPage() {
+  return (
+    <>
+      <h1 className="page-title">Reports</h1>
+      <p className="page-subtitle">Operational and revenue insights.</p>
+      <div className="card"><p className="meta">Hook up reporting endpoints to show charts.</p></div>
+    </>
+  );
+}
+
+function FrontDeskDashboardPage() {
+  const { loading, error, summary, upcoming, recent } = useDashboardData(true);
+  const customersState = useApi('/manage/customers/', []);
+  const memorialsState = useApi('/memorials/', []);
+  const servicesState = useApi('/scheduling/services/', []);
+
+  const customers = Array.isArray(customersState.data) ? customersState.data : [];
+  const memorials = Array.isArray(memorialsState.data) ? memorialsState.data : [];
+  const services = Array.isArray(servicesState.data) ? servicesState.data : [];
+
+  const unscheduledServices = services.filter((service) => !service.scheduled_start || service.status === 'draft');
+  const overdueFollowups = customers.filter((customer) => !customer.last_contact).slice(0, 5);
+  const recentCompleted = Array.isArray(recent) ? recent.slice(0, 4) : [];
+
+  return (
+    <>
+      <h1 className="page-title">Front Desk Dashboard</h1>
+      <p className="page-subtitle">Daily control center for intake, scheduling, customer follow-up, and email outreach.</p>
+
+      {(error || customersState.error || memorialsState.error || servicesState.error) && (
+        <div className="card warn">
+          Backend error: {error || customersState.error || memorialsState.error || servicesState.error}
+        </div>
+      )}
+
+      <section className="kpis">
         <div className="kpi">
-          <span className="kpi-label">Data Quality Checks</span>
-          <strong>97.6%</strong>
-          <small>Required fields complete</small>
+          <span className="kpi-label">Projected Revenue</span>
+          <strong>{summary ? formatCurrency(summary.projected_revenue || 0) : '—'}</strong>
+          <small className="positive">Jobs scheduled, not completed</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Customers</span>
+          <strong>{customersState.loading ? '—' : customers.length}</strong>
+          <small>{customersState.loading ? 'Loading records' : 'Active customer records'}</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Unscheduled Jobs</span>
+          <strong>{servicesState.loading ? '—' : unscheduledServices.length}</strong>
+          <small>{servicesState.loading ? 'Loading jobs' : 'Needs front desk action'}</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Memorials</span>
+          <strong>{memorialsState.loading ? '—' : memorials.length}</strong>
+          <small>{memorialsState.loading ? 'Loading memorials' : 'Track and service status'}</small>
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Priority Queue</h3>
+            <a className="ghost-btn" href="#/frontdesk/scheduling">Open Scheduling</a>
+          </div>
+          <div className="compact-stack">
+            <div className="queue-row">
+              <strong>{unscheduledServices.length}</strong>
+              <span>Jobs still need scheduling or technician assignment.</span>
+            </div>
+            <div className="queue-row">
+              <strong>{summary?.services_today ?? 0}</strong>
+              <span>Services are on the calendar for today.</span>
+            </div>
+            <div className="queue-row">
+              <strong>{overdueFollowups.length}</strong>
+              <span>Customers have no recent contact logged and may need a follow-up.</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Quick Actions</h3>
+            <span className="meta">Most-used workflow shortcuts</span>
+          </div>
+          <div className="quick-links">
+            <a className="quick-link-card" href="#/frontdesk/onboarding">
+              <strong>New Intake</strong>
+              <span>Add a customer and memorial request.</span>
+            </a>
+            <a className="quick-link-card" href="#/frontdesk/customers">
+              <strong>Customer Records</strong>
+              <span>Update contact info and manage accounts.</span>
+            </a>
+            <a className="quick-link-card" href="#/frontdesk/emails">
+              <strong>Email Outreach</strong>
+              <span>Send updates and reminders.</span>
+            </a>
+            <a className="quick-link-card" href="#/frontdesk/reports">
+              <strong>Reports</strong>
+              <span>Review revenue and operational status.</span>
+            </a>
+          </div>
         </div>
       </section>
 
@@ -834,92 +2277,194 @@ function DashboardPage() {
         <div className="card">
           <div className="card-header">
             <h3>Upcoming Services</h3>
-            <button className="ghost-btn">View Calendar</button>
+            <a className="ghost-btn" href="#/frontdesk/scheduling">View All</a>
           </div>
-
-          <ul className="service-list">
-            <li>
-              <strong>Smith Family Headstone</strong>
-              <span>Greenwood Cemetery &middot; Sarah Johnson</span>
-              <div className="meta">9:00 AM &middot; Northern Utah &middot; Spencer</div>
-              <a className="inline-link" href="#/admin/customers">Open Customer</a>
-            </li>
-            <li>
-              <strong>Jones Memorial</strong>
-              <span>Oakwood Memorial Park &middot; Michael Jones</span>
-              <div className="meta">10:30 AM &middot; Southern Utah &middot; Avery</div>
-              <a className="inline-link" href="#/admin/customers">Open Customer</a>
-            </li>
-            <li>
-              <strong>Thompson Headstone</strong>
-              <span>Hillcrest Cemetery &middot; Lydia Thompson</span>
-              <div className="meta">11:00 AM &middot; Northern Utah &middot; Jade</div>
-              <a className="inline-link" href="#/admin/customers">Open Customer</a>
-            </li>
-          </ul>
+          {loading && <p className="meta">Loading upcoming services...</p>}
+          {!loading && upcoming.length === 0 && <p className="meta">No upcoming services scheduled.</p>}
+          {!loading && upcoming.length > 0 && (
+            <ul className="service-list">
+              {upcoming.slice(0, 5).map((service) => (
+                <li key={service.id}>
+                  <strong>{service.memorial_name || `Service #${service.id}`}</strong>
+                  <span>{service.cemetery_name || 'No cemetery'}</span>
+                  <div className="meta">{formatDateTimeShort(service.scheduled_start)} · {service.status_display || service.status}</div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="card">
-          <h3>Monthly Revenue</h3>
-          <p className="meta">Scheduled vs collected revenue (best for CRM collections tracking)</p>
-          <div className="revenue-chart">
-            {MONTHLY_REVENUE_SERIES.map((entry) => (
-              <div className="revenue-row" key={entry.month}>
-                <span className="revenue-month">{entry.month}</span>
-                <div className="revenue-bars">
-                  <div
-                    className="revenue-bar scheduled"
-                    style={{ width: `${Math.round((entry.scheduled / maxRevenue) * 100)}%` }}
-                  >
-                    S ${entry.scheduled.toLocaleString()}
-                  </div>
-                  <div
-                    className="revenue-bar collected"
-                    style={{ width: `${Math.round((entry.collected / maxRevenue) * 100)}%` }}
-                  >
-                    C ${entry.collected.toLocaleString()}
-                  </div>
-                  <div className="revenue-delta-row">
-                    <span className={`revenue-delta ${entry.collected >= entry.scheduled ? 'positive' : 'negative'}`}>
-                      {entry.collected >= entry.scheduled ? 'Over target' : 'Gap'}: ${Math.abs(entry.collected - entry.scheduled).toLocaleString()}
-                    </span>
-                    <span className="revenue-rate">
-                      Collection rate: {Math.round((entry.collected / entry.scheduled) * 100)}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="card-header">
+            <h3>Recent Completed Jobs</h3>
+            <span className="meta">Revenue already realized</span>
           </div>
+          {loading && <p className="meta">Loading completed jobs...</p>}
+          {!loading && recentCompleted.length === 0 && <p className="meta">No recently completed jobs.</p>}
+          {!loading && recentCompleted.length > 0 && (
+            <ul className="service-list">
+              {recentCompleted.map((service) => (
+                <li key={service.id}>
+                  <strong>{service.memorial_name || `Service #${service.id}`}</strong>
+                  <span>{service.cemetery_name || 'No cemetery'}</span>
+                  <div className="meta">{formatDateOnly(service.completed_date)} · {formatCurrency(Number(service.amount || 0))}</div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </section>
+    </>
+  );
+}
+
+function EmailsPage() {
+  const customerState = useApi('/customers/', []);
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState([]);
+  const [manualRecipients, setManualRecipients] = useState('');
+  const [subject, setSubject] = useState('Service update for {{client_name}}');
+  const [body, setBody] = useState(
+    'Hello {{client_name}},\n\n'
+    + 'This is an update from Headstone Restoration regarding your memorial service.\n'
+    + 'We will follow up with your scheduling details shortly.\n\n'
+    + 'Best regards,\n'
+    + 'Headstone Restoration'
+  );
+  const [sendState, setSendState] = useState({ loading: false, error: '', result: null });
+
+  const customersWithEmail = useMemo(
+    () => (customerState.data || []).filter((customer) => Boolean(customer.email)),
+    [customerState.data]
+  );
+
+  const selectedCustomers = useMemo(
+    () => customersWithEmail.filter((customer) => selectedCustomerIds.includes(customer.id)),
+    [customersWithEmail, selectedCustomerIds]
+  );
+
+  const parsedManualRecipients = useMemo(() => {
+    return manualRecipients
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = line.match(/^(.*?)<([^>]+)>$/);
+        if (match) {
+          return { raw: line, name: match[1].trim().replace(/^"|"$/g, ''), email: match[2].trim() };
+        }
+        return { raw: line, name: '', email: line };
+      });
+  }, [manualRecipients]);
+
+  function toggleCustomer(customerId) {
+    setSelectedCustomerIds((prev) => {
+      if (prev.includes(customerId)) return prev.filter((id) => id !== customerId);
+      return [...prev, customerId];
+    });
+  }
+
+  function selectAll() {
+    setSelectedCustomerIds(customersWithEmail.map((customer) => customer.id));
+  }
+
+  function clearAll() {
+    setSelectedCustomerIds([]);
+  }
+
+  async function handleSend(event) {
+    event.preventDefault();
+    setSendState({ loading: true, error: '', result: null });
+
+    if (!selectedCustomerIds.length && !parsedManualRecipients.length) {
+      setSendState({ loading: false, error: 'Add at least one recipient.', result: null });
+      return;
+    }
+    if (!subject.trim() || !body.trim()) {
+      setSendState({ loading: false, error: 'Subject and body are required.', result: null });
+      return;
+    }
+
+    const manualErrors = parsedManualRecipients
+      .map((recipient) => {
+        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient.email);
+        return emailOk ? '' : `Invalid recipient: ${recipient.raw}`;
+      })
+      .filter(Boolean);
+    if (manualErrors.length) {
+      setSendState({ loading: false, error: manualErrors[0], result: null });
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/emails/send/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_ids: selectedCustomerIds,
+          recipients: parsedManualRecipients.map((recipient) => ({
+            email: recipient.email,
+            name: recipient.name
+          })),
+          subject,
+          body
+        })
+      });
+      const json = await res.json();
+      if (!res.ok && res.status !== 207) {
+        throw new Error(json.detail || `Send failed (${res.status})`);
+      }
+      setSendState({ loading: false, error: '', result: json });
+    } catch (err) {
+      setSendState({ loading: false, error: err.message || 'Failed to send emails.', result: null });
+    }
+  }
+
+  return (
+    <>
+      <h1 className="page-title">Email Center</h1>
+      <p className="page-subtitle">Send real outbound emails to customers or ad hoc recipients from one internal workflow.</p>
+
+      {customerState.error && <div className="card warn">Backend error: {customerState.error}</div>}
 
       <section className="grid-2">
         <div className="card">
-          <h3>Recently Completed</h3>
+          <div className="card-header">
+            <h3>Recipients</h3>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className="ghost-btn" type="button" onClick={selectAll}>Select All</button>
+              <button className="ghost-btn" type="button" onClick={clearAll}>Clear</button>
+            </div>
+          </div>
+          <p className="meta">
+            {selectedCustomerIds.length} selected / {customersWithEmail.length} with email addresses
+          </p>
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Memorial</th>
-                  <th>Cemetery</th>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  <th>Photo Status</th>
-                  <th>Billing</th>
-                  <th>Action</th>
+                  <th>Pick</th>
+                  <th>Customer</th>
+                  <th>Email</th>
                 </tr>
               </thead>
               <tbody>
-                {recentlyCompleted.map((record) => (
-                  <tr key={record.memorial}>
-                    <td>{record.memorial}</td>
-                    <td>{record.cemetery}</td>
-                    <td>{record.completedOn}</td>
-                    <td>{record.amount}</td>
-                    <td>{record.photoStatus}</td>
-                    <td>{record.invoiceStatus}</td>
-                    <td><button className="ghost-btn">Review</button></td>
+                {customerState.loading && (
+                  <tr><td colSpan="3" className="meta">Loading customers...</td></tr>
+                )}
+                {!customerState.loading && customersWithEmail.length === 0 && (
+                  <tr><td colSpan="3" className="meta">No customers with emails found.</td></tr>
+                )}
+                {!customerState.loading && customersWithEmail.map((customer) => (
+                  <tr key={customer.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedCustomerIds.includes(customer.id)}
+                        onChange={() => toggleCustomer(customer.id)}
+                      />
+                    </td>
+                    <td>{customer.full_name}</td>
+                    <td>{customer.email}</td>
                   </tr>
                 ))}
               </tbody>
@@ -928,1371 +2473,344 @@ function DashboardPage() {
         </div>
 
         <div className="card">
-          <h3>Customer Journey Pipeline</h3>
-          <p className="meta">Track every customer from first call to annual care.</p>
-          <ul className="service-list">
-            {pipelineStages.map((stage) => (
-              <li key={stage}>
-                <strong>{stage}</strong>
-              </li>
-            ))}
-          </ul>
-          <button className="primary-btn full">Open Billing &amp; Pipeline</button>
+          <h3>Compose</h3>
+          <form className="form" onSubmit={handleSend}>
+            <label>Manual Recipients</label>
+            <textarea
+              value={manualRecipients}
+              onChange={(event) => setManualRecipients(event.target.value)}
+              rows={4}
+              placeholder={'One per line\nfriend@example.com\nJane Doe <jane@example.com>'}
+              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}
+            />
+            <p className="meta">
+              Send to selected customers and/or manual recipients. Manual recipients support `Name &lt;email@example.com&gt;`.
+            </p>
+
+            <label>Subject</label>
+            <input
+              type="text"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+              placeholder="Subject"
+            />
+
+            <label>Body</label>
+            <textarea
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              rows={10}
+              style={{ padding: '10px', borderRadius: '8px', border: '1px solid #e5e7eb' }}
+            />
+
+            <p className="meta">Tokens: {'{{client_name}}'}, {'{{customer_name}}'}, {'{{first_name}}'}, {'{{email}}'}</p>
+            <p className="meta">
+              Ready to send to {selectedCustomers.length + parsedManualRecipients.length} recipient
+              {selectedCustomers.length + parsedManualRecipients.length === 1 ? '' : 's'}.
+            </p>
+
+            {sendState.error && <div className="form-error">{sendState.error}</div>}
+            {sendState.loading && <div className="card form-success"><strong>Sending emails...</strong></div>}
+            <button className="primary-btn" type="submit" disabled={sendState.loading}>
+              {sendState.loading ? 'Sending...' : 'Send Emails'}
+            </button>
+          </form>
         </div>
       </section>
-    </>
-  );
-}
 
-function MemorialsPage({
-  memorialRecords = DEFAULT_MEMORIAL_RECORDS,
-  onOpenMemorial = () => {}
-}) {
-  const [query, setQuery] = useState('');
-
-  const filteredRecords = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return memorialRecords;
-    return memorialRecords.filter((record) => {
-      const haystack = [
-        record.memorial,
-        record.customer,
-        record.cemetery,
-        record.plan,
-        record.team,
-        record.technician
-      ].join(' ').toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [memorialRecords, query]);
-
-  return (
-    <>
-      <h1 className="page-title">Memorials</h1>
-      <p className="page-subtitle">Permanent memorial records with service plan and next service date.</p>
-
-      <div className="card memorial-filter-card">
-        <label htmlFor="memorial-filter">Search Memorial Records</label>
-        <input
-          id="memorial-filter"
-          type="text"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search by memorial, customer, cemetery, team, or tech"
-        />
-        <p className="meta">Global search still lives in the top bar; this filters the memorial records table.</p>
-      </div>
-
-      <div className="card">
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Memorial</th>
-                <th>Customer</th>
-                <th>Cemetery</th>
-                <th>Plan</th>
-                <th>Last Service</th>
-                <th>Next Service</th>
-                <th>Record</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRecords.length === 0 ? (
-                <tr>
-                  <td colSpan="7">No memorial records match this search.</td>
-                </tr>
-              ) : (
-                filteredRecords.map((record) => (
-                  <tr key={record.id}>
-                    <td>{record.memorial}</td>
-                    <td>{record.customer}</td>
-                    <td>{record.cemetery}</td>
-                    <td>{record.plan}</td>
-                    <td>{record.lastService}</td>
-                    <td>{record.nextService}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={() => onOpenMemorial(record)}
-                      >
-                        Open Memorial
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function SchedulingPage() {
-  const [viewMode, setViewMode] = useState('week');
-  const [teamFilter, setTeamFilter] = useState('All Teams');
-  const [techFilter, setTechFilter] = useState('All Techs');
-
-  const teams = useMemo(
-    () => ['All Teams', ...Array.from(new Set(DEFAULT_SCHEDULE_ENTRIES.map((entry) => entry.team)))],
-    []
-  );
-  const techs = useMemo(
-    () => ['All Techs', ...Array.from(new Set(DEFAULT_SCHEDULE_ENTRIES.map((entry) => entry.tech)))],
-    []
-  );
-
-  const filteredSchedule = useMemo(() => (
-    DEFAULT_SCHEDULE_ENTRIES.filter((entry) => {
-      if (teamFilter !== 'All Teams' && entry.team !== teamFilter) return false;
-      if (techFilter !== 'All Techs' && entry.tech !== techFilter) return false;
-      return true;
-    })
-  ), [teamFilter, techFilter]);
-
-  return (
-    <>
-      <h1 className="page-title">Scheduling</h1>
-      <p className="page-subtitle">Week, month, and day drill-through with team and technician filters.</p>
-
-      <div className="card">
-        <div className="card-header">
-          <h3>Service Calendar</h3>
-          <button className="ghost-btn">Flag Scheduling Issue</button>
-        </div>
-        <div className="toggle-group">
-          {['day', 'week', 'month'].map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`toggle-btn${viewMode === mode ? ' active' : ''}`}
-              onClick={() => setViewMode(mode)}
-            >
-              {mode[0].toUpperCase() + mode.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div className="filters-row">
-          <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
-            {teams.map((team) => (
-              <option key={team} value={team}>{team}</option>
-            ))}
-          </select>
-          <select value={techFilter} onChange={(event) => setTechFilter(event.target.value)}>
-            {techs.map((tech) => (
-              <option key={tech} value={tech}>{tech}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="calendar-placeholder">
-          {viewMode[0].toUpperCase() + viewMode.slice(1)} view preview
-        </div>
-
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Memorial</th>
-                <th>Team</th>
-                <th>Tech</th>
-                <th>Customer Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredSchedule.length === 0 ? (
-                <tr>
-                  <td colSpan="5">No services match this filter.</td>
-                </tr>
-              ) : (
-                filteredSchedule.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{entry.time}</td>
-                    <td>{entry.memorial}</td>
-                    <td>{entry.team}</td>
-                    <td>{entry.tech}</td>
-                    <td>{entry.customerNotes}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function MemorialDetailPage({
-  memorial,
-  jobRecords = [],
-  onBack = () => {},
-  onOpenCustomer = () => {},
-  showCustomerAction = true
-}) {
-  if (!memorial) {
-    return (
-      <>
-        <h1 className="page-title">Memorial Detail</h1>
-        <p className="page-subtitle">No memorial selected.</p>
-        <button type="button" className="ghost-btn" onClick={onBack}>
-          Back to Memorials
-        </button>
-      </>
-    );
-  }
-
-  const relatedJobs = (jobRecords || [])
-    .filter((job) => {
-      if (job.memorialId && job.memorialId === memorial.id) return true;
-      return memorialLookupKey(job) === memorialLookupKey(memorial);
-    })
-    .sort((a, b) => {
-      const aTime = Date.parse(a.createdAt || '') || 0;
-      const bTime = Date.parse(b.createdAt || '') || 0;
-      return bTime - aTime;
-    });
-
-  const latestJob = relatedJobs[0] || null;
-
-  return (
-    <>
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <h1 className="page-title">{memorial.memorial}</h1>
-            <p className="page-subtitle">{memorial.cemetery} &middot; {memorial.customer}</p>
-          </div>
-          <div className="inline-actions">
-            <button type="button" className="ghost-btn" onClick={onBack}>
-              Back to Memorials
-            </button>
-            {showCustomerAction && (
-              <button type="button" className="primary-btn" onClick={() => onOpenCustomer(memorial)}>
-                Open Customer
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <section className="grid-2">
+      {sendState.result && (
         <div className="card">
-          <h3>Service Snapshot</h3>
-          <ul className="service-list">
-            <li>
-              <strong>Plan</strong>
-              <span>{memorial.plan || '-'}</span>
-            </li>
-            <li>
-              <strong>Status</strong>
-              <span>{memorial.subStatus || '-'}</span>
-            </li>
-            <li>
-              <strong>Team / Tech</strong>
-              <span>{memorial.team || 'Unassigned'} / {memorial.technician || 'Unassigned'}</span>
-            </li>
-            <li>
-              <strong>Last Service</strong>
-              <span>{memorial.lastService || '-'}</span>
-            </li>
-            <li>
-              <strong>Next Service</strong>
-              <span>{memorial.nextService || '-'}</span>
-            </li>
-            <li>
-              <strong>Photo Status</strong>
-              <span>{memorial.photoStatus || '-'}</span>
-            </li>
-          </ul>
-        </div>
-
-        <div className="card">
-          <h3>Latest Job Notes</h3>
-          {latestJob ? (
-            <ul className="service-list">
-              <li>
-                <strong>Customer Notes</strong>
-                <span>{latestJob.customerNotes || 'No customer notes.'}</span>
-              </li>
-              <li>
-                <strong>Leadership Notes</strong>
-                <span>{latestJob.leadershipNotes || 'No leadership notes.'}</span>
-              </li>
-              <li>
-                <strong>Photo Files</strong>
-                <span>{(latestJob.photoFiles || []).length}</span>
-              </li>
-              <li>
-                <strong>Document Files</strong>
-                <span>{(latestJob.documentFiles || []).length}</span>
-              </li>
-            </ul>
-          ) : (
-            <p className="meta">No job history yet for this memorial.</p>
+          <h3>Send Result</h3>
+          <p className="meta">From: {sendState.result.from_email}</p>
+          <p className="meta">
+            Sent: {sendState.result.sent_count} · Skipped: {sendState.result.skipped_count} · Failed: {sendState.result.failed_count}
+          </p>
+          {sendState.result.ok && (
+            <div className="card form-success"><strong>Emails sent successfully.</strong></div>
+          )}
+          {sendState.result.failed_count > 0 && (
+            <div className="form-error">Some emails failed. Check backend logs/SMTP configuration.</div>
+          )}
+          {sendState.result.sent?.length > 0 && (
+            <div className="compact-stack" style={{ marginTop: '12px' }}>
+              {sendState.result.sent.map((row, index) => (
+                <div key={`${row.email}-${index}`} className="queue-row">
+                  <strong>OK</strong>
+                  <div>
+                    <div>{row.name || row.email}</div>
+                    <span>{row.email}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {sendState.result.failed?.length > 0 && (
+            <div className="compact-stack" style={{ marginTop: '12px' }}>
+              {sendState.result.failed.map((row, index) => (
+                <div key={`${row.email}-${index}`} className="queue-row">
+                  <strong>!</strong>
+                  <div>
+                    <div>{row.name || row.email}</div>
+                    <span>{row.error}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
-      </section>
-
-      <div className="card">
-        <h3>Job History</h3>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Status</th>
-                <th>Team</th>
-                <th>Tech</th>
-                <th>Photos</th>
-                <th>Docs</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {relatedJobs.length === 0 ? (
-                <tr>
-                  <td colSpan="7">No job records available.</td>
-                </tr>
-              ) : (
-                relatedJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td>{formatDisplayDate(job.createdAt, '-')}</td>
-                    <td>{job.status || '-'}</td>
-                    <td>{job.team || '-'}</td>
-                    <td>{job.technician || '-'}</td>
-                    <td>{(job.photoFiles || []).length}</td>
-                    <td>{(job.documentFiles || []).length}</td>
-                    <td>{job.customerNotes || job.leadershipNotes || '-'}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      )}
     </>
   );
 }
 
-function CustomersPage({ customers = [], onOpenCustomerDetails = () => {} }) {
-  const [query, setQuery] = useState('');
+function AdminServiceOptionsManager() {
+  const serviceOptionsState = useApi('/manage/service-options/?include_inactive=1', [], true, { refreshEvent: 'hs:service-options-updated' });
+  const [form, setForm] = useState({ name: '', sort_order: '0' });
+  const [saveState, setSaveState] = useState({ loading: false, error: '', success: '' });
+  const [rowState, setRowState] = useState({ loadingId: null, error: '', success: '' });
 
-  const filteredCustomers = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return customers;
-    return customers.filter((customer) => {
-      const haystack = [
-        customer.name,
-        customer.email,
-        customer.activePlan,
-        customer.serviceLocation
-      ].join(' ').toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [customers, query]);
+  async function handleCreate(event) {
+    event.preventDefault();
+    setSaveState({ loading: true, error: '', success: '' });
+    try {
+      const res = await apiFetch('/manage/service-options/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim(),
+          sort_order: Number(form.sort_order) || 0,
+          is_active: true
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(formatApiError(json, `Create failed (${res.status})`));
+      setForm({ name: '', sort_order: '0' });
+      setSaveState({ loading: false, error: '', success: 'Service added.' });
+      window.dispatchEvent(new Event('hs:service-options-updated'));
+    } catch (err) {
+      setSaveState({ loading: false, error: err.message || 'Failed to add service.', success: '' });
+    }
+  }
+
+  async function handleToggle(option) {
+    setRowState({ loadingId: option.id, error: '', success: '' });
+    try {
+      const res = await apiFetch(`/manage/service-options/${option.id}/`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !option.is_active })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(formatApiError(json, `Update failed (${res.status})`));
+      setRowState({ loadingId: null, error: '', success: 'Service updated.' });
+      window.dispatchEvent(new Event('hs:service-options-updated'));
+    } catch (err) {
+      setRowState({ loadingId: null, error: err.message || 'Failed to update service.', success: '' });
+    }
+  }
+
+  async function handleDelete(optionId) {
+    if (!window.confirm('Delete this service option?')) return;
+    setRowState({ loadingId: optionId, error: '', success: '' });
+    try {
+      const res = await apiFetch(`/manage/service-options/${optionId}/`, { method: 'DELETE' });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `Delete failed (${res.status})`);
+      }
+      setRowState({ loadingId: null, error: '', success: 'Service deleted.' });
+      window.dispatchEvent(new Event('hs:service-options-updated'));
+    } catch (err) {
+      setRowState({ loadingId: null, error: err.message || 'Failed to delete service.', success: '' });
+    }
+  }
 
   return (
-    <>
-      <h1 className="page-title">Customers</h1>
-      <p className="page-subtitle">Client records and associated memorials.</p>
-      <p className="meta">Double-click a customer row to open details.</p>
-
-      <div className="card memorial-filter-card">
-        <label htmlFor="customer-filter">Search Customers</label>
-        <input
-          id="customer-filter"
-          type="text"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search by customer, email, plan, or location"
-        />
+    <section className="grid-2">
+      <div className="card">
+        <h3>Service Catalog</h3>
+        <p className="meta">Add the service names your team can schedule from the admin side.</p>
+        <form className="form" onSubmit={handleCreate}>
+          <label>Service Name</label>
+          <input
+            value={form.name}
+            onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+            placeholder="Example: Bronze reset"
+            required
+          />
+          <label>Sort Order</label>
+          <input
+            type="number"
+            min="0"
+            value={form.sort_order}
+            onChange={(event) => setForm((prev) => ({ ...prev, sort_order: event.target.value }))}
+          />
+          {saveState.error && <div className="form-error">{saveState.error}</div>}
+          {saveState.success && <div className="card form-success"><strong>{saveState.success}</strong></div>}
+          <button className="primary-btn" type="submit" disabled={saveState.loading}>
+            {saveState.loading ? 'Adding...' : 'Add Service'}
+          </button>
+        </form>
       </div>
 
       <div className="card">
+        <h3>Configured Services</h3>
+        {serviceOptionsState.error && <div className="form-error">{serviceOptionsState.error}</div>}
+        {rowState.error && <div className="form-error">{rowState.error}</div>}
+        {rowState.success && <p className="meta">{rowState.success}</p>}
         <div className="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>Customer</th>
-                <th>Memorials</th>
-                <th>Active Plan</th>
-                <th>Last Contact</th>
-                <th>Lifetime Value</th>
-                <th>Portal Access</th>
+                <th>Service</th>
+                <th>Order</th>
+                <th>Status</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {filteredCustomers.length === 0 ? (
-                <tr>
-                  <td colSpan="7">No customers found.</td>
-                </tr>
-              ) : (
-                filteredCustomers.map((customer) => (
-                  <tr
-                    key={customer.email}
-                    className="clickable-row"
-                    onDoubleClick={() => onOpenCustomerDetails(customer)}
-                    title="Double-click to view customer details"
-                  >
-                    <td>{customer.name}</td>
-                    <td>{customer.memorials}</td>
-                    <td>{customer.activePlan}</td>
-                    <td>{customer.lastContact}</td>
-                    <td>{customer.lifetimeValue || '$0.00'}</td>
-                    <td>{customer.hasPortalAccess ? 'Enabled' : 'Disabled'}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={() => onOpenCustomerDetails(customer)}
-                      >
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                ))
+              {serviceOptionsState.loading && <tr><td colSpan="4" className="meta">Loading services...</td></tr>}
+              {!serviceOptionsState.loading && serviceOptionsState.data.length === 0 && (
+                <tr><td colSpan="4" className="meta">No service options yet.</td></tr>
               )}
+              {!serviceOptionsState.loading && serviceOptionsState.data.map((option) => (
+                <tr key={option.id}>
+                  <td>{option.name}</td>
+                  <td>{option.sort_order}</td>
+                  <td>{option.is_active ? 'Active' : 'Inactive'}</td>
+                  <td style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      className="ghost-btn"
+                      onClick={() => handleToggle(option)}
+                      disabled={rowState.loadingId === option.id}
+                    >
+                      {option.is_active ? 'Disable' : 'Enable'}
+                    </button>
+                    {!option.legacy_key && (
+                      <button
+                        className="ghost-btn"
+                        onClick={() => handleDelete(option.id)}
+                        disabled={rowState.loadingId === option.id}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </div>
-    </>
+    </section>
   );
 }
 
-function CustomerDetailPage({
-  customer,
-  onBack = () => {},
-  onOpenMemorial = () => {}
-}) {
-  if (!customer) {
+function SettingsPage(props) {
+  if (props.sessionUser?.frontend_role === 'admin') {
     return (
       <>
-        <h1 className="page-title">Customer Detail</h1>
-        <p className="page-subtitle">No customer selected.</p>
-        <button type="button" className="ghost-btn" onClick={onBack}>
-          Back to Customers
-        </button>
+        <h1 className="page-title">Settings</h1>
+        <p className="page-subtitle">Manage your profile and the service catalog used when new jobs are created.</p>
+        <AdminServiceOptionsManager />
+        <UserSettingsPage {...props} hideHeader />
       </>
     );
   }
-
-  const subscriptionTagClass = customer.subscriptionStatus === 'Active' ? 'good' : 'warn';
-  const memorialDetails = Array.isArray(customer.memorialDetails) ? customer.memorialDetails : [];
-
-  return (
-    <>
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <h1 className="page-title">{customer.name}</h1>
-            <p className="page-subtitle">{customer.email}</p>
-          </div>
-          <button type="button" className="ghost-btn" onClick={onBack}>
-            Back to Customers
-          </button>
-        </div>
-        <div className="meta">Customer since {customer.createdAtLabel || '-'}</div>
-      </div>
-
-      <section className="grid-2">
-        <div className="card">
-          <h3>Service Overview</h3>
-          <ul className="service-list">
-            <li>
-              <strong>Service Type</strong>
-              <span>{customer.serviceType}</span>
-            </li>
-            <li>
-              <strong>Service Location</strong>
-              <span>{customer.serviceLocation}</span>
-            </li>
-            <li>
-              <strong>Last Service</strong>
-              <span>{customer.lastService}</span>
-            </li>
-            <li>
-              <strong>Next Service</strong>
-              <span>{customer.nextService}</span>
-            </li>
-            <li>
-              <strong>Annual Care Plan</strong>
-              <span>{customer.annualCare || 'Not enrolled'}</span>
-            </li>
-          </ul>
-        </div>
-
-        <div className="card">
-          <h3>Account &amp; Value</h3>
-          <p><span className={`tag ${subscriptionTagClass}`}>{customer.subscriptionStatus}</span></p>
-          <ul className="service-list">
-            <li>
-              <strong>Lifetime Value</strong>
-              <span>{customer.lifetimeValue || '$0.00'}</span>
-            </li>
-            <li>
-              <strong>Memorials Covered</strong>
-              <span>{customer.memorials}</span>
-            </li>
-            <li>
-              <strong>Last Contact</strong>
-              <span>{customer.lastContact}</span>
-            </li>
-            <li>
-              <strong>Renewal</strong>
-              <span>{customer.subscriptionRenewal || '-'}</span>
-            </li>
-            <li>
-              <strong>Portal Access</strong>
-              <span>{customer.hasPortalAccess ? 'Enabled' : 'Disabled'}</span>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="card">
-        <h3>Memorial Portfolio</h3>
-        <p className="meta">Each memorial includes a sub-status and service details.</p>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Memorial</th>
-                <th>Sub-Status</th>
-                <th>Plan</th>
-                <th>Last Service</th>
-                <th>Next Service</th>
-                <th>Photo Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {memorialDetails.length === 0 ? (
-                <tr>
-                  <td colSpan="7">No memorial detail records yet.</td>
-                </tr>
-              ) : (
-                memorialDetails.map((memorial) => (
-                  <tr key={memorial.id}>
-                    <td>
-                      <strong>{memorial.memorial}</strong>
-                      <div className="meta">{memorial.cemetery}</div>
-                    </td>
-                    <td>{memorial.subStatus}</td>
-                    <td>{memorial.plan}</td>
-                    <td>{memorial.lastService}</td>
-                    <td>{memorial.nextService}</td>
-                    <td>{memorial.photoStatus}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={() => onOpenMemorial(memorial)}
-                      >
-                        Open Memorial
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3>Customer Notes</h3>
-        <p>{customer.customerNotes || 'No notes recorded yet.'}</p>
-      </div>
-    </>
-  );
+  return <UserSettingsPage {...props} />;
 }
 
-function CemeteriesPage({ customers = [], onOpenCustomerDetails = () => {} }) {
-  const [selectedCemetery, setSelectedCemetery] = useState('All Cemeteries');
-
-  const cemeteryRecords = useMemo(() => (
-    customers.flatMap((customer) => {
-      const details = Array.isArray(customer.memorialDetails) ? customer.memorialDetails : [];
-      return details.map((detail) => ({
-        id: `${customer.email}-${detail.id}`,
-        customerEmail: customer.email,
-        customerName: customer.name,
-        memorial: detail.memorial,
-        cemetery: detail.cemetery,
-        nextService: detail.nextService,
-        subStatus: detail.subStatus
-      }));
-    })
-  ), [customers]);
-
-  const cemeteryOptions = useMemo(
-    () => ['All Cemeteries', ...Array.from(new Set(cemeteryRecords.map((record) => record.cemetery)))],
-    [cemeteryRecords]
-  );
-
-  const filteredRecords = useMemo(() => (
-    cemeteryRecords.filter((record) => (
-      selectedCemetery === 'All Cemeteries' || record.cemetery === selectedCemetery
-    ))
-  ), [cemeteryRecords, selectedCemetery]);
-
-  return (
-    <>
-      <h1 className="page-title">Cemeteries</h1>
-      <p className="page-subtitle">Select a cemetery and drill into all related memorial records.</p>
-
-      <div className="card">
-        <div className="filters-row">
-          <select value={selectedCemetery} onChange={(event) => setSelectedCemetery(event.target.value)}>
-            {cemeteryOptions.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        </div>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Cemetery</th>
-                <th>Memorial</th>
-                <th>Customer</th>
-                <th>Next Service</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRecords.length === 0 ? (
-                <tr>
-                  <td colSpan="6">No memorials found for this cemetery.</td>
-                </tr>
-              ) : (
-                filteredRecords.map((record) => (
-                  <tr key={record.id}>
-                    <td>{record.cemetery}</td>
-                    <td>{record.memorial}</td>
-                    <td>{record.customerName}</td>
-                    <td>{record.nextService}</td>
-                    <td>{record.subStatus}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={() => {
-                          const customer = customers.find(
-                            (candidate) => candidate.email === record.customerEmail
-                          );
-                          if (customer) onOpenCustomerDetails(customer);
-                        }}
-                      >
-                        Open Customer
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function ArchivePage() {
-  const [assetFilter, setAssetFilter] = useState('All');
-  const [assetSearch, setAssetSearch] = useState('');
-
-  const assets = [
-    {
-      id: 'asset-1',
-      type: 'Photo',
-      memorial: 'Smith Family Headstone',
-      customer: 'Sarah Johnson',
-      uploaded: '09/12/23',
-      status: 'Retain permanently'
-    },
-    {
-      id: 'asset-2',
-      type: 'Document',
-      memorial: 'Jones Memorial',
-      customer: 'Michael Jones',
-      uploaded: '09/02/23',
-      status: 'Waiver signed'
-    },
-    {
-      id: 'asset-3',
-      type: 'Photo',
-      memorial: 'Carter Memorial',
-      customer: 'Daniel Carter',
-      uploaded: '09/23/23',
-      status: 'Pending review'
-    }
-  ];
-
-  const filteredAssets = useMemo(() => {
-    const needle = assetSearch.trim().toLowerCase();
-    return assets.filter((asset) => {
-      if (assetFilter !== 'All' && asset.type !== assetFilter) return false;
-      if (!needle) return true;
-      return [asset.memorial, asset.customer, asset.status].join(' ').toLowerCase().includes(needle);
-    });
-  }, [assetFilter, assetSearch]);
-
-  return (
-    <>
-      <h1 className="page-title">Photos & Archive</h1>
-      <p className="page-subtitle">Store and retrieve photos and documents by memorial and customer.</p>
-
-      <div className="card">
-        <div className="filters-row">
-          <select value={assetFilter} onChange={(event) => setAssetFilter(event.target.value)}>
-            <option value="All">All Assets</option>
-            <option value="Photo">Photos</option>
-            <option value="Document">Documents</option>
-          </select>
-          <input
-            type="text"
-            value={assetSearch}
-            onChange={(event) => setAssetSearch(event.target.value)}
-            placeholder="Search by memorial, customer, or status"
-          />
-        </div>
-
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Type</th>
-                <th>Memorial</th>
-                <th>Customer</th>
-                <th>Uploaded</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredAssets.length === 0 ? (
-                <tr>
-                  <td colSpan="5">No archive assets match this filter.</td>
-                </tr>
-              ) : (
-                filteredAssets.map((asset) => (
-                  <tr key={asset.id}>
-                    <td>{asset.type}</td>
-                    <td>{asset.memorial}</td>
-                    <td>{asset.customer}</td>
-                    <td>{asset.uploaded}</td>
-                    <td>{asset.status}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function ReportsPage() {
-  const reportCards = [
-    { title: 'Yearly Revenue by Service Type', value: 'Restoration 51% / Maintenance 49%' },
-    { title: 'Average Lifetime Value', value: '$2,340' },
-    { title: 'New Customers by Month', value: '18 in current month' },
-    { title: 'Completion Rate', value: '99.1%' }
-  ];
-
-  return (
-    <>
-      <h1 className="page-title">Reports</h1>
-      <p className="page-subtitle">Operational and financial insights for admin, coordinators, and tech leads.</p>
-
-      <div className="grid-equal">
-        {reportCards.map((card) => (
-          <div className="card report-card" key={card.title}>
-            <h3>{card.title}</h3>
-            <p>{card.value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="grid-2">
-        <div className="card">
-          <h3>Leadership Notes by Job</h3>
-          <ul className="service-list">
-            <li>
-              <strong>Photo Compliance</strong>
-              <span>96% of completed services include complete before/after sets.</span>
-            </li>
-            <li>
-              <strong>Route Efficiency</strong>
-              <span>Southern Utah team reduced drive time by 8% this month.</span>
-            </li>
-          </ul>
-        </div>
-        <div className="card">
-          <h3>Quality Data Checks</h3>
-          <ul className="service-list">
-            <li>
-              <strong>Missing next service date</strong>
-              <span>3 memorial records</span>
-            </li>
-            <li>
-              <strong>Pending invoice closeout</strong>
-              <span>5 completed jobs</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function SettingsPage() {
-  const [darkMode, setDarkMode] = useState(() => {
-    try {
-      return localStorage.getItem('hs_dark_mode') === '1';
-    } catch (err) {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    document.body.classList.toggle('theme-dark', darkMode);
-    try {
-      localStorage.setItem('hs_dark_mode', darkMode ? '1' : '0');
-    } catch (err) {
-      // ignore storage errors
-    }
-  }, [darkMode]);
-
-  return (
-    <>
-      <h1 className="page-title">Settings</h1>
-      <p className="page-subtitle">Workspace preferences and account-level behavior.</p>
-
-      <div className="card form">
-        <label className="toggle-label" htmlFor="dark-mode-toggle">
-          <span>Dark Mode</span>
-          <input
-            id="dark-mode-toggle"
-            type="checkbox"
-            checked={darkMode}
-            onChange={(event) => setDarkMode(event.target.checked)}
-          />
-        </label>
-        <p className="meta">Keeps your preference on this browser.</p>
-      </div>
-    </>
-  );
-}
-
-function UsersAdminPage({
-  onCreateUser,
-  onUpdateEmployee,
-  userManagementFeedback,
-  employeeAccounts
-}) {
-  const [employeeName, setEmployeeName] = useState('');
-  const [employeeEmail, setEmployeeEmail] = useState('');
-  const [employeePhone, setEmployeePhone] = useState('');
-  const [employmentType, setEmploymentType] = useState('Full-time');
-  const [employeeTeam, setEmployeeTeam] = useState('Northern Utah');
-  const [employeeError, setEmployeeError] = useState('');
-
-  const [editingEmail, setEditingEmail] = useState('');
-  const [editDraft, setEditDraft] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    employmentType: 'Full-time',
-    team: 'Northern Utah'
-  });
-
-  const employeeUsers = useMemo(
-    () => (employeeAccounts || []).slice().sort((a, b) => {
-      const aTime = Date.parse(a.createdAt || '') || 0;
-      const bTime = Date.parse(b.createdAt || '') || 0;
-      return bTime - aTime;
-    }),
-    [employeeAccounts]
-  );
-
-  function submitCreateUser() {
-    const name = employeeName.trim();
-    const email = employeeEmail.trim();
-    const phone = employeePhone.trim();
-    const team = employeeTeam.trim();
-
-    if (!name || !email) {
-      setEmployeeError('Name and email are required.');
-      return;
-    }
-
-    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!validEmail) {
-      setEmployeeError('Enter a valid email address.');
-      return;
-    }
-
-    const result = onCreateUser({
-      userType: 'employee',
-      name,
-      email,
-      extraFields: {
-        phone,
-        employmentType,
-        team
-      }
-    });
-
-    if (!result || result.error) {
-      setEmployeeError(result && result.error ? result.error : 'Unable to create user.');
-      return;
-    }
-
-    setEmployeeError('');
-    setEmployeeName('');
-    setEmployeeEmail('');
-    setEmployeePhone('');
-    setEmploymentType('Full-time');
-    setEmployeeTeam('Northern Utah');
-  }
-
-  function startEdit(account) {
-    setEditingEmail(account.email);
-    setEditDraft({
-      name: account.name || '',
-      email: account.email || '',
-      phone: account.phone || '',
-      employmentType: account.employmentType || 'Full-time',
-      team: account.team || 'Northern Utah'
-    });
-    setEmployeeError('');
-  }
-
-  function saveEdit() {
-    if (!editingEmail) return;
-    const name = editDraft.name.trim();
-    const email = editDraft.email.trim();
-    if (!name || !email) {
-      setEmployeeError('Name and email are required for updates.');
-      return;
-    }
-
-    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!validEmail) {
-      setEmployeeError('Enter a valid email address.');
-      return;
-    }
-
-    const result = onUpdateEmployee({
-      originalEmail: editingEmail,
-      name,
-      email,
-      phone: editDraft.phone.trim(),
-      employmentType: editDraft.employmentType,
-      team: editDraft.team.trim()
-    });
-
-    if (!result || result.error) {
-      setEmployeeError(result && result.error ? result.error : 'Unable to update employee.');
-      return;
-    }
-
-    setEmployeeError('');
-    setEditingEmail('');
-  }
-
-  return (
-    <>
-      <h1 className="page-title">Users</h1>
-      <p className="page-subtitle">Manage employee access. Customer login access is disabled.</p>
-
-      {userManagementFeedback && (
-        <div className="card form-success">
-          <strong>{userManagementFeedback.mode === 'updated' ? 'Employee Updated' : 'Employee Created'}</strong>
-          <p>
-            {userManagementFeedback.name} ({userManagementFeedback.email})
-            {userManagementFeedback.team ? ` · ${userManagementFeedback.team}` : ''}
-          </p>
-        </div>
-      )}
-
-      <div className="card form">
-        <h3>Create Employee User</h3>
-        {employeeError && <p className="form-error">{employeeError}</p>}
-
-        <label>Employee Name *</label>
-        <input
-          type="text"
-          value={employeeName}
-          onChange={(event) => setEmployeeName(event.target.value)}
-          placeholder="Full name"
-        />
-
-        <label>Employee Email *</label>
-        <input
-          type="email"
-          value={employeeEmail}
-          onChange={(event) => setEmployeeEmail(event.target.value)}
-          placeholder="name@example.com"
-        />
-
-        <label>Phone</label>
-        <input
-          type="tel"
-          value={employeePhone}
-          onChange={(event) => setEmployeePhone(event.target.value)}
-          placeholder="(555) 123-4567"
-        />
-
-        <label>Employment Status</label>
-        <select value={employmentType} onChange={(event) => setEmploymentType(event.target.value)}>
-          <option>Full-time</option>
-          <option>Part-time</option>
-        </select>
-
-        <label>Team</label>
-        <input
-          type="text"
-          value={employeeTeam}
-          onChange={(event) => setEmployeeTeam(event.target.value)}
-          placeholder="Northern Utah"
-        />
-
-        <button
-          type="button"
-          className="primary-btn"
-          onClick={submitCreateUser}
-        >
-          Create Employee
-        </button>
-      </div>
-
-      {editingEmail && (
-        <div className="card form">
-          <h3>Edit Employee</h3>
-
-          <label>Name</label>
-          <input
-            type="text"
-            value={editDraft.name}
-            onChange={(event) => setEditDraft((draft) => ({ ...draft, name: event.target.value }))}
-          />
-
-          <label>Email</label>
-          <input
-            type="email"
-            value={editDraft.email}
-            onChange={(event) => setEditDraft((draft) => ({ ...draft, email: event.target.value }))}
-          />
-
-          <label>Phone</label>
-          <input
-            type="tel"
-            value={editDraft.phone}
-            onChange={(event) => setEditDraft((draft) => ({ ...draft, phone: event.target.value }))}
-          />
-
-          <label>Employment Status</label>
-          <select
-            value={editDraft.employmentType}
-            onChange={(event) => setEditDraft((draft) => ({ ...draft, employmentType: event.target.value }))}
-          >
-            <option>Full-time</option>
-            <option>Part-time</option>
-          </select>
-
-          <label>Team</label>
-          <input
-            type="text"
-            value={editDraft.team}
-            onChange={(event) => setEditDraft((draft) => ({ ...draft, team: event.target.value }))}
-          />
-
-          <div className="inline-actions">
-            <button type="button" className="primary-btn" onClick={saveEdit}>Save Changes</button>
-            <button type="button" className="ghost-btn" onClick={() => setEditingEmail('')}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      <div className="card">
-        <h3>Employee Access</h3>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Phone</th>
-                <th>Employment</th>
-                <th>Team</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {employeeUsers.length === 0 ? (
-                <tr>
-                  <td colSpan="8">No employee users created yet.</td>
-                </tr>
-              ) : (
-                employeeUsers.map((account) => (
-                  <tr key={account.email}>
-                    <td>{account.name || '-'}</td>
-                    <td>{account.email}</td>
-                    <td>{account.phone || '-'}</td>
-                    <td>{account.employmentType || '-'}</td>
-                    <td>{account.team || '-'}</td>
-                    <td>{account.mustResetPassword ? 'Reset Required' : 'Active'}</td>
-                    <td>{account.createdAt ? new Date(account.createdAt).toLocaleDateString() : '-'}</td>
-                    <td>
-                      <button type="button" className="ghost-btn" onClick={() => startEdit(account)}>
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function OnboardingPage({ onCreateService, onboardingFeedback }) {
-  const [customerName, setCustomerName] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [memorialSearch, setMemorialSearch] = useState('');
-  const [cemetery, setCemetery] = useState('');
-  const [serviceType, setServiceType] = useState('Initial Restoration');
-  const [intakeNotes, setIntakeNotes] = useState('');
-  const [intakeFiles, setIntakeFiles] = useState([]);
-  const [errorMessage, setErrorMessage] = useState('');
-
-  function handleSubmit(event) {
-    event.preventDefault();
-    const trimmedName = customerName.trim();
-    const trimmedEmail = customerEmail.trim();
-
-    if (!trimmedName || !trimmedEmail) {
-      setErrorMessage('Customer name and email are required.');
-      return;
-    }
-
-    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail);
-    if (!validEmail) {
-      setErrorMessage('Enter a valid email address.');
-      return;
-    }
-
-    const result = onCreateService({
-      customerName: trimmedName,
-      customerEmail: trimmedEmail,
-      customerPhone: customerPhone.trim(),
-      memorialSearch: memorialSearch.trim(),
-      cemetery: cemetery.trim(),
-      serviceType,
-      intakeNotes: intakeNotes.trim(),
-      intakeFiles
-    });
-
-    if (!result || result.error) {
-      setErrorMessage(result && result.error ? result.error : 'Unable to create service.');
-      return;
-    }
-
-    setErrorMessage('');
-    setCustomerName('');
-    setCustomerEmail('');
-    setCustomerPhone('');
-    setMemorialSearch('');
-    setCemetery('');
-    setServiceType('Initial Restoration');
-    setIntakeNotes('');
-    setIntakeFiles([]);
-  }
-
-  function handleFileSelection(event) {
-    const files = Array.from(event.target.files || []);
-    setIntakeFiles(files.map((file) => file.name));
-  }
-
+function OnboardingPage() {
   return (
     <>
       <h1 className="page-title">Onboarding</h1>
-      <p className="page-subtitle">Capture intake details, photos, and service setup without customer login provisioning.</p>
+      <p className="page-subtitle">Add a new customer and memorial.</p>
 
-      {onboardingFeedback && (
-        <div className="card form-success">
-          <strong>Service Intake Created</strong>
-          <p>{onboardingFeedback.name} ({onboardingFeedback.email}) is now in the onboarding pipeline.</p>
-          <p>Customer login access remains disabled by default.</p>
-          <p>{onboardingFeedback.intakeFiles || 0} intake files attached.</p>
-        </div>
-      )}
-
-      <form className="card form" onSubmit={handleSubmit}>
-        {errorMessage && <p className="form-error">{errorMessage}</p>}
-
-        <label>Customer Name *</label>
-        <input
-          type="text"
-          value={customerName}
-          onChange={(event) => setCustomerName(event.target.value)}
-          placeholder="Full name"
-          required
-        />
-
-        <label>Customer Email *</label>
-        <input
-          type="email"
-          value={customerEmail}
-          onChange={(event) => setCustomerEmail(event.target.value)}
-          placeholder="name@example.com"
-          required
-        />
-
-        <label>Customer Phone</label>
-        <input
-          type="tel"
-          value={customerPhone}
-          onChange={(event) => setCustomerPhone(event.target.value)}
-          placeholder="(555) 123-4567"
-        />
-
+      <div className="card form">
         <label>Search Memorial (GPS / BillionGraves)</label>
-        <input
-          type="text"
-          value={memorialSearch}
-          onChange={(event) => setMemorialSearch(event.target.value)}
-          placeholder="Search by name, cemetery, or GPS"
-        />
+        <input type="text" placeholder="Search by name, cemetery, or GPS" />
 
         <label>Cemetery</label>
-        <input
-          type="text"
-          value={cemetery}
-          onChange={(event) => setCemetery(event.target.value)}
-        />
+        <input type="text" />
 
         <label>Service Type</label>
-        <select value={serviceType} onChange={(event) => setServiceType(event.target.value)}>
+        <select>
           <option>Initial Restoration</option>
           <option>Maintenance Plan</option>
         </select>
 
-        <label>Initial Notes</label>
-        <textarea
-          value={intakeNotes}
-          onChange={(event) => setIntakeNotes(event.target.value)}
-          placeholder="Customer call notes, permissions, upsell opportunities, and quality requirements."
-        />
-
-        <label>Initial Photos / Documents</label>
-        <input type="file" multiple onChange={handleFileSelection} />
-        {intakeFiles.length > 0 && (
-          <ul className="compact-list">
-            {intakeFiles.map((fileName) => (
-              <li key={fileName}>{fileName}</li>
-            ))}
-          </ul>
-        )}
-
-        <button type="submit" className="primary-btn">Create Service</button>
-      </form>
+        <button className="primary-btn">Continue</button>
+      </div>
     </>
   );
 }
 
 function EmployeeDashboardPage() {
-  const [scheduleView, setScheduleView] = useState('Daily');
+  const { loading, error, summary, upcoming, recent } = useDashboardData(true);
+
+  const stats = [
+    {
+      label: 'Assigned Jobs',
+      value: summary?.active_services ?? '—',
+      sub: summary ? `${summary.services_today} on your calendar today` : 'Loading assignments'
+    },
+    {
+      label: 'Completion Rate',
+      value: summary ? formatPercent(summary.completion_rate || 0) : '—',
+      sub: 'Your assigned jobs'
+    }
+  ];
 
   return (
     <>
       <h1 className="page-title">Crew Dashboard</h1>
-      <p className="page-subtitle">Daily, weekly, and monthly schedule snapshot with crew and note context.</p>
+      <p className="page-subtitle">Today's assignments, status updates, and photo tasks.</p>
 
-      <div className="toggle-group">
-        {['Daily', 'Weekly', 'Monthly'].map((view) => (
-          <button
-            key={view}
-            type="button"
-            className={`toggle-btn${scheduleView === view ? ' active' : ''}`}
-            onClick={() => setScheduleView(view)}
-          >
-            {view}
-          </button>
-        ))}
-      </div>
+      {error && <div className="card warn">Backend error: {error}</div>}
 
-      <section className="grid-2">
-        <div className="card">
-          <h3>{scheduleView} Schedule</h3>
-          <p>Smith Family Headstone</p>
-          <div className="meta">9:00 AM &middot; Greenwood Cemetery &middot; Northern Utah Crew</div>
-          <div className="inline-actions">
-            <button className="primary-btn">View Route</button>
-            <button className="ghost-btn">Optimize Route</button>
+      <section className="kpis">
+        {stats.map((stat) => (
+          <div key={stat.label} className="kpi">
+            <span className="kpi-label">{stat.label}</span>
+            <strong>{stat.value}</strong>
+            <small>{stat.sub}</small>
           </div>
-        </div>
-        <div className="card">
-          <h3>Crew Info</h3>
-          <ul className="service-list">
-            <li>
-              <strong>Team</strong>
-              <span>Northern Utah</span>
-            </li>
-            <li>
-              <strong>Lead Tech</strong>
-              <span>Spencer</span>
-            </li>
-            <li>
-              <strong>Shift Type</strong>
-              <span>Full-time field day</span>
-            </li>
-          </ul>
-          <button className="ghost-btn">Flag Scheduling Issue</button>
-        </div>
+        ))}
       </section>
 
       <section className="grid-2">
         <div className="card">
-          <h3>Upcoming Stops</h3>
-          <ul className="service-list">
-            {DEFAULT_SCHEDULE_ENTRIES.map((entry) => (
-              <li key={entry.id}>
-                <strong>{entry.memorial}</strong>
-                <span>{entry.cemetery}</span>
-                <div className="meta">{entry.time} &middot; {entry.tech}</div>
-                <div className="meta">Customer note: {entry.customerNotes}</div>
-              </li>
-            ))}
-          </ul>
+          <h3>Upcoming Assignments</h3>
+          {loading && <p className="meta">Loading assignments...</p>}
+          {!loading && upcoming.length === 0 && <p className="meta">No jobs assigned yet.</p>}
+          {!loading && upcoming.length > 0 && (
+            <ul className="service-list">
+              {upcoming.map((svc) => (
+                <li key={svc.id}>
+                  <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                  <span>{svc.cemetery_name || 'Scheduled location'}</span>
+                  <div className="meta">{formatDateTimeShort(svc.scheduled_start)} · {svc.status_display || svc.status}</div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
+
         <div className="card">
-          <h3>Leadership Notes</h3>
-          <ul className="service-list">
-            {DEFAULT_SCHEDULE_ENTRIES.map((entry) => (
-              <li key={`${entry.id}-leadership`}>
-                <strong>{entry.memorial}</strong>
-                <span>{entry.leadershipNotes}</span>
-              </li>
-            ))}
-          </ul>
+          <h3>Recently Completed</h3>
+          {loading && <p className="meta">Loading completed jobs...</p>}
+          {!loading && recent.length === 0 && <p className="meta">No completed jobs yet.</p>}
+          {!loading && recent.length > 0 && (
+            <ul className="service-list">
+              {recent.map((svc) => (
+                <li key={svc.id}>
+                  <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                  <span>{svc.cemetery_name || '—'}</span>
+                  <div className="meta">{formatDateOnly(svc.completed_date)} · {svc.amount != null ? formatCurrency(Number(svc.amount)) : 'No invoice yet'}</div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </section>
     </>
@@ -2300,93 +2818,165 @@ function EmployeeDashboardPage() {
 }
 
 function EmployeeSchedulingPage() {
-  const [viewMode, setViewMode] = useState('week');
-  const [teamFilter, setTeamFilter] = useState('All Teams');
-  const [techFilter, setTechFilter] = useState('All Techs');
+  const servicesState = useApi('/scheduling/services/', [], true, { refreshEvent: 'hs:schedule-updated' });
+  const [services, setServices] = useState([]);
+  const [completeState, setCompleteState] = useState({ loading: false, error: '', success: '' });
+  const [uploadState, setUploadState] = useState({ loading: false, error: '', success: '', serviceId: null });
 
-  const teams = useMemo(
-    () => ['All Teams', ...Array.from(new Set(DEFAULT_SCHEDULE_ENTRIES.map((entry) => entry.team)))],
-    []
+  useEffect(() => {
+    setServices(Array.isArray(servicesState.data) ? servicesState.data : []);
+  }, [servicesState.data]);
+
+  const futureJobs = useMemo(
+    () => services.filter((svc) => svc.status !== 'completed'),
+    [services]
   );
-  const techs = useMemo(
-    () => ['All Techs', ...Array.from(new Set(DEFAULT_SCHEDULE_ENTRIES.map((entry) => entry.tech)))],
-    []
+  const pastJobs = useMemo(
+    () => services.filter((svc) => svc.status === 'completed'),
+    [services]
   );
 
-  const filteredSchedule = useMemo(() => (
-    DEFAULT_SCHEDULE_ENTRIES.filter((entry) => {
-      if (teamFilter !== 'All Teams' && entry.team !== teamFilter) return false;
-      if (techFilter !== 'All Techs' && entry.tech !== techFilter) return false;
-      return true;
-    })
-  ), [teamFilter, techFilter]);
+  async function handleMarkComplete(serviceId) {
+    setCompleteState({ loading: true, error: '', success: '' });
+    try {
+      const res = await apiFetch(`/manager/services/${serviceId}/complete/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (!res.ok) {
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (error) {
+          payload = await res.text();
+        }
+        throw new Error(formatApiError(payload, `Complete failed (${res.status})`));
+      }
+      const json = await res.json();
+      setServices((prev) => prev.filter((item) => item.id !== Number(serviceId)));
+      window.dispatchEvent(new Event('hs:schedule-updated'));
+      setCompleteState({
+        loading: false,
+        error: '',
+        success: `${getServiceTypeLabel(json.service)} marked complete.`
+      });
+    } catch (err) {
+      setCompleteState({ loading: false, error: err.message || 'Failed to complete job.', success: '' });
+    }
+  }
+
+  async function handlePhotoChange(serviceId, event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploadState({ loading: true, error: '', success: '', serviceId });
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('photo_type', 'during');
+
+      const res = await apiFetch(`/manager/services/${serviceId}/photos/`, {
+        method: 'POST',
+        body: formData
+      });
+      const raw = await res.text();
+      let payload = raw;
+      try {
+        payload = raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        payload = raw;
+      }
+      if (!res.ok) {
+        throw new Error(formatApiError(payload, `Upload failed (${res.status})`));
+      }
+      window.dispatchEvent(new Event('hs:photos-updated'));
+      setUploadState({
+        loading: false,
+        error: '',
+        success: 'Photo uploaded.',
+        serviceId: null,
+      });
+    } catch (err) {
+      setUploadState({
+        loading: false,
+        error: err.message || 'Failed to upload photo.',
+        success: '',
+        serviceId: null,
+      });
+    } finally {
+      event.target.value = '';
+    }
+  }
 
   return (
     <>
       <h1 className="page-title">My Schedule</h1>
-      <p className="page-subtitle">Drill into day/week/month views and filter by team or technician.</p>
+      <p className="page-subtitle">Crew assignments and upcoming services.</p>
+      {(servicesState.error || completeState.error || uploadState.error) && (
+        <div className="card warn">Backend error: {uploadState.error || completeState.error || servicesState.error}</div>
+      )}
+      {completeState.success && <div className="card success">{completeState.success}</div>}
+      {uploadState.success && <div className="card success">{uploadState.success}</div>}
 
       <div className="card">
-        <div className="toggle-group">
-          {['day', 'week', 'month'].map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`toggle-btn${viewMode === mode ? ' active' : ''}`}
-              onClick={() => setViewMode(mode)}
-            >
-              {mode[0].toUpperCase() + mode.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        <div className="filters-row">
-          <select value={teamFilter} onChange={(event) => setTeamFilter(event.target.value)}>
-            {teams.map((team) => (
-              <option key={team} value={team}>{team}</option>
+        <h3>Future Jobs</h3>
+        {servicesState.loading && <p className="meta">Loading your schedule...</p>}
+        {!servicesState.loading && futureJobs.length === 0 && <p className="meta">No upcoming assigned jobs right now.</p>}
+        {!servicesState.loading && futureJobs.length > 0 && (
+          <ul className="service-list">
+            {futureJobs.map((svc) => (
+              <li key={svc.id}>
+                <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                <span>{svc.cemetery_name || 'Scheduled location'}</span>
+                <div className="meta">
+                  {formatDateTimeShort(svc.scheduled_start)} · {svc.status_display || svc.status || 'Scheduled'}
+                </div>
+                <div className="meta">
+                  {getServiceTypeLabel(svc)}
+                  {svc.estimated_minutes ? ` · ${svc.estimated_minutes} min` : ''}
+                </div>
+                <button
+                  className="primary-btn"
+                  type="button"
+                  onClick={() => handleMarkComplete(svc.id)}
+                  disabled={completeState.loading || svc.status === 'completed'}
+                >
+                  {completeState.loading ? 'Saving...' : 'Completed'}
+                </button>
+                <label className="ghost-btn file-upload-btn">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(event) => handlePhotoChange(svc.id, event)}
+                    disabled={uploadState.loading}
+                    hidden
+                  />
+                  {uploadState.loading && uploadState.serviceId === svc.id ? 'Uploading...' : 'Add Photo'}
+                </label>
+              </li>
             ))}
-          </select>
-          <select value={techFilter} onChange={(event) => setTechFilter(event.target.value)}>
-            {techs.map((tech) => (
-              <option key={tech} value={tech}>{tech}</option>
+          </ul>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>Past Jobs</h3>
+        {servicesState.loading && <p className="meta">Loading history...</p>}
+        {!servicesState.loading && pastJobs.length === 0 && <p className="meta">No past jobs yet.</p>}
+        {!servicesState.loading && pastJobs.length > 0 && (
+          <ul className="service-list">
+            {pastJobs.map((svc) => (
+              <li key={svc.id}>
+                <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                <span>{svc.cemetery_name || 'Scheduled location'}</span>
+                <div className="meta">Completed {formatDateOnly(svc.completed_date)}</div>
+                <div className="meta">
+                  {getServiceTypeLabel(svc)}
+                  {svc.estimated_minutes ? ` · ${svc.estimated_minutes} min` : ''}
+                </div>
+              </li>
             ))}
-          </select>
-        </div>
-
-        <div className="calendar-placeholder">
-          {viewMode[0].toUpperCase() + viewMode.slice(1)} calendar preview
-        </div>
-
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Memorial</th>
-                <th>Team</th>
-                <th>Tech</th>
-                <th>Customer Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredSchedule.length === 0 ? (
-                <tr>
-                  <td colSpan="5">No assignments match this filter.</td>
-                </tr>
-              ) : (
-                filteredSchedule.map((entry) => (
-                  <tr key={`employee-${entry.id}`}>
-                    <td>{entry.time}</td>
-                    <td>{entry.memorial}</td>
-                    <td>{entry.team}</td>
-                    <td>{entry.tech}</td>
-                    <td>{entry.customerNotes}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+          </ul>
+        )}
       </div>
     </>
   );
@@ -2397,46 +2987,7 @@ function CustomerDashboardPage() {
     <>
       <h1 className="page-title">Customer Overview</h1>
       <p className="page-subtitle">Your memorials, service history, and upcoming visits.</p>
-
-      <section className="grid-2">
-        <div className="card">
-          <h3>Next Service</h3>
-          <p>Smith Family Headstone</p>
-          <div className="meta">Scheduled for 10/12/23</div>
-          <button className="primary-btn">View Details</button>
-        </div>
-        <div className="card">
-          <h3>Service Status</h3>
-          <p>Maintenance plan active</p>
-          <div className="progress">
-            <div className="progress-bar"></div>
-          </div>
-          <span className="meta">72% of yearly plan complete</span>
-        </div>
-      </section>
-
-      <section className="grid-2">
-        <div className="card">
-          <h3>Recent Updates</h3>
-          <ul className="service-list">
-            <li>
-              <strong>Photo Review</strong>
-              <span>2 new photos added</span>
-              <div className="meta">Yesterday</div>
-            </li>
-            <li>
-              <strong>Service Complete</strong>
-              <span>Cleaning finished</span>
-              <div className="meta">09/23/23</div>
-            </li>
-          </ul>
-        </div>
-        <div className="card">
-          <h3>Support</h3>
-          <p>Questions about services or billing?</p>
-          <button className="ghost-btn">Contact Support</button>
-        </div>
-      </section>
+      <div className="card"><p className="meta">No customer dashboard data yet.</p></div>
     </>
   );
 }
@@ -2447,277 +2998,1764 @@ function CustomerMemorialsPage() {
       <h1 className="page-title">My Memorials</h1>
       <p className="page-subtitle">Active memorials under your care plan.</p>
 
-      <div className="card">
-        <div className="table-scroll">
+      <div className="card"><p className="meta">No memorials for this customer yet.</p></div>
+    </>
+  );
+}
+
+function UserSettingsPage({ sessionUser, onSessionUserUpdate, hideHeader = false }) {
+  const [profile, setProfile] = useState({
+    full_name: '',
+    email: '',
+    phone: '',
+    date_of_birth: '',
+    address_line1: '',
+    address_line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    bio: '',
+    profile_photo_url: ''
+  });
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState('');
+  const [removePhoto, setRemovePhoto] = useState(false);
+  const [state, setState] = useState({ loading: true, saving: false, error: '', success: '' });
+
+  function applyProfileResponse(json, successMessage = 'Profile updated.') {
+    setProfile({
+      full_name: json.full_name || '',
+      email: json.email || '',
+      phone: json.phone || '',
+      date_of_birth: json.date_of_birth || '',
+      address_line1: json.address_line1 || '',
+      address_line2: json.address_line2 || '',
+      city: json.city || '',
+      state: json.state || '',
+      postal_code: json.postal_code || '',
+      bio: json.bio || '',
+      profile_photo_url: json.profile_photo_url || ''
+    });
+    setSelectedPhoto(null);
+    setPhotoPreviewUrl('');
+    setRemovePhoto(false);
+    setState({ loading: false, saving: false, error: '', success: successMessage });
+    if (typeof onSessionUserUpdate === 'function') {
+      onSessionUserUpdate({
+        ...sessionUser,
+        full_name: json.full_name || sessionUser?.full_name || '',
+        email: json.email || sessionUser?.email || '',
+        phone: json.phone || sessionUser?.phone || '',
+        profile_photo_url: json.profile_photo_url || ''
+      });
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      try {
+        const res = await apiFetch('/auth/profile/');
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.detail || `Profile load failed (${res.status})`);
+        if (cancelled) return;
+        setProfile({
+          full_name: json.full_name || '',
+          email: json.email || '',
+          phone: json.phone || '',
+          date_of_birth: json.date_of_birth || '',
+          address_line1: json.address_line1 || '',
+          address_line2: json.address_line2 || '',
+          city: json.city || '',
+          state: json.state || '',
+          postal_code: json.postal_code || '',
+          bio: json.bio || '',
+          profile_photo_url: json.profile_photo_url || ''
+        });
+        setPhotoPreviewUrl('');
+        setRemovePhoto(false);
+        setState({ loading: false, saving: false, error: '', success: '' });
+      } catch (err) {
+        if (cancelled) return;
+        setState({ loading: false, saving: false, error: err.message || 'Failed to load profile.', success: '' });
+      }
+    }
+
+    loadProfile();
+    return () => { cancelled = true; };
+  }, []);
+
+  function handleInputChange(event) {
+    const { name, value } = event.target;
+    setProfile((prev) => ({ ...prev, [name]: value }));
+  }
+
+  async function handlePhotoChange(event) {
+    const file = event.target.files && event.target.files[0] ? event.target.files[0] : null;
+    setSelectedPhoto(file);
+    if (!file) return;
+    const localPreview = URL.createObjectURL(file);
+    setPhotoPreviewUrl(localPreview);
+    setRemovePhoto(false);
+    setState((prev) => ({ ...prev, saving: true, error: '', success: '' }));
+    try {
+      const formData = new FormData();
+      formData.append('profile_photo', file);
+      const res = await apiFetch('/auth/profile/', {
+        method: 'PATCH',
+        body: formData
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || JSON.stringify(json));
+      applyProfileResponse(json, 'Profile photo updated.');
+    } catch (err) {
+      URL.revokeObjectURL(localPreview);
+      setPhotoPreviewUrl('');
+      setSelectedPhoto(null);
+      setState((prev) => ({
+        ...prev,
+        saving: false,
+        error: err.message || 'Failed to upload profile photo.',
+        success: ''
+      }));
+    }
+  }
+
+  async function handleRemovePhoto() {
+    setSelectedPhoto(null);
+    setPhotoPreviewUrl('');
+    setRemovePhoto(true);
+    setState((prev) => ({ ...prev, saving: true, error: '', success: '' }));
+    try {
+      const formData = new FormData();
+      formData.append('remove_profile_photo', 'true');
+      const res = await apiFetch('/auth/profile/', {
+        method: 'PATCH',
+        body: formData
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || JSON.stringify(json));
+      applyProfileResponse(json, 'Profile photo removed.');
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        saving: false,
+        error: err.message || 'Failed to remove profile photo.',
+        success: ''
+      }));
+    }
+  }
+
+  async function handleSave(event) {
+    event.preventDefault();
+    setState((prev) => ({ ...prev, saving: true, error: '', success: '' }));
+    try {
+      const formData = new FormData();
+      Object.entries(profile).forEach(([key, value]) => {
+        if (key === 'profile_photo_url') return;
+        if (key === 'date_of_birth') {
+          if (value) formData.append(key, value);
+          return;
+        }
+        formData.append(key, value || '');
+      });
+      if (selectedPhoto) {
+        formData.append('profile_photo', selectedPhoto);
+      } else if (removePhoto) {
+        formData.append('remove_profile_photo', 'true');
+      }
+
+      const res = await apiFetch('/auth/profile/', {
+        method: 'PATCH',
+        body: formData
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || JSON.stringify(json));
+      applyProfileResponse(json, 'Profile updated.');
+    } catch (err) {
+      setState({ loading: false, saving: false, error: err.message || 'Failed to save profile.', success: '' });
+    }
+  }
+
+  return (
+    <>
+      {!hideHeader && (
+        <>
+          <h1 className="page-title">Settings</h1>
+          <p className="page-subtitle">Manage your personal profile, contact details, and profile picture.</p>
+        </>
+      )}
+
+      {state.error && <div className="card warn">Profile error: {state.error}</div>}
+
+      <section className="grid-2">
+        <div className="card">
+          <h3>Profile Picture</h3>
+          <div className="profile-photo-panel">
+            {photoPreviewUrl || profile.profile_photo_url ? (
+              <img className="profile-photo-preview" src={photoPreviewUrl || profile.profile_photo_url} alt="Profile" />
+            ) : (
+              <div className="profile-photo-empty">No photo</div>
+            )}
+            <input type="file" accept="image/*" onChange={handlePhotoChange} />
+            {state.saving && <p className="meta">Updating photo...</p>}
+            {(photoPreviewUrl || profile.profile_photo_url || selectedPhoto) && (
+              <button className="ghost-btn" type="button" onClick={handleRemovePhoto}>Remove Photo</button>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <h3>Profile Details</h3>
+          {state.loading ? (
+            <p className="meta">Loading profile...</p>
+          ) : (
+            <form className="form" onSubmit={handleSave}>
+              <label>Full Name</label>
+              <input name="full_name" value={profile.full_name} onChange={handleInputChange} />
+
+              <label>Email</label>
+              <input type="email" name="email" value={profile.email} onChange={handleInputChange} />
+
+              <label>Phone</label>
+              <input type="tel" name="phone" value={profile.phone} onChange={handleInputChange} />
+
+              <label>Date of Birth</label>
+              <input type="date" name="date_of_birth" value={profile.date_of_birth} onChange={handleInputChange} />
+
+              <label>Address Line 1</label>
+              <input name="address_line1" value={profile.address_line1} onChange={handleInputChange} />
+
+              <label>Address Line 2</label>
+              <input name="address_line2" value={profile.address_line2} onChange={handleInputChange} />
+
+              <div className="grid-3">
+                <div>
+                  <label>City</label>
+                  <input name="city" value={profile.city} onChange={handleInputChange} />
+                </div>
+                <div>
+                  <label>State</label>
+                  <input name="state" value={profile.state} onChange={handleInputChange} />
+                </div>
+                <div>
+                  <label>Postal Code</label>
+                  <input name="postal_code" value={profile.postal_code} onChange={handleInputChange} />
+                </div>
+              </div>
+
+              <label>Bio</label>
+              <textarea name="bio" value={profile.bio} onChange={handleInputChange} rows={5} />
+
+              {state.success && <div className="card form-success"><strong>{state.success}</strong></div>}
+              <button className="primary-btn" type="submit" disabled={state.saving}>
+                {state.saving ? 'Saving...' : 'Save Profile'}
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function createCustomerFormState(overrides = {}) {
+  return {
+    full_name: '',
+    email: '',
+    phone: '',
+    how_heard_about_us: '',
+    address_line1: '',
+    address_line2: '',
+    city: '',
+    state: '',
+    postal_code: '',
+    notes: '',
+    ...overrides
+  };
+}
+
+function createCemeteryFormState(overrides = {}) {
+  return {
+    id: '',
+    name: '',
+    address: '',
+    city: '',
+    state: '',
+    contact_name: '',
+    contact_phone: '',
+    contact_email: '',
+    notes: '',
+    ...overrides
+  };
+}
+
+function createMemorialFormState(overrides = {}) {
+  return {
+    id: '',
+    customer_id: '',
+    customer: '',
+    cemetery_id: '',
+    cemetery: '',
+    name_on_stone: '',
+    material: 'other',
+    stone_style: '',
+    has_plaque: false,
+    has_paint: false,
+    decoration_notes: '',
+    location_description: '',
+    age_years: '',
+    previous_cleaning_notes: '',
+    notes: '',
+    photo_names: [],
+    regional_team: '',
+    last_service_date: '',
+    ...overrides
+  };
+}
+
+function handleDraftFieldChange(setter, event) {
+  const { name, value, type, checked } = event.target;
+  setter((prev) => ({
+    ...prev,
+    [name]: type === 'checkbox' ? checked : value
+  }));
+}
+
+function CustomerFormFields({ form, onChange }) {
+  return (
+    <>
+      <label>Full Name</label>
+      <input name="full_name" value={form.full_name} onChange={onChange} required />
+
+      <div className="field-row">
+        <div>
+          <label>Email</label>
+          <input type="email" name="email" value={form.email} onChange={onChange} />
+        </div>
+        <div>
+          <label>Phone</label>
+          <input name="phone" value={form.phone} onChange={onChange} />
+        </div>
+      </div>
+
+      <label>How They Heard About Us</label>
+      <input
+        name="how_heard_about_us"
+        value={form.how_heard_about_us}
+        onChange={onChange}
+        placeholder="Referral, cemetery office, search, repeat customer..."
+      />
+
+      <label>Address Line 1</label>
+      <input name="address_line1" value={form.address_line1} onChange={onChange} />
+
+      <label>Address Line 2</label>
+      <input name="address_line2" value={form.address_line2} onChange={onChange} />
+
+      <div className="grid-3">
+        <div>
+          <label>City</label>
+          <input name="city" value={form.city} onChange={onChange} />
+        </div>
+        <div>
+          <label>State</label>
+          <input name="state" value={form.state} onChange={onChange} />
+        </div>
+        <div>
+          <label>Postal Code</label>
+          <input name="postal_code" value={form.postal_code} onChange={onChange} />
+        </div>
+      </div>
+
+      <label>Notes</label>
+      <textarea name="notes" value={form.notes} onChange={onChange} rows={4} />
+    </>
+  );
+}
+
+function CemeteryFormFields({ form, onChange }) {
+  return (
+    <>
+      <label>Cemetery Name</label>
+      <input name="name" value={form.name} onChange={onChange} required />
+
+      <label>Address</label>
+      <input name="address" value={form.address} onChange={onChange} />
+
+      <div className="grid-3">
+        <div>
+          <label>City</label>
+          <input name="city" value={form.city} onChange={onChange} />
+        </div>
+        <div>
+          <label>State</label>
+          <input name="state" value={form.state} onChange={onChange} />
+        </div>
+        <div>
+          <label>Contact</label>
+          <input name="contact_name" value={form.contact_name} onChange={onChange} />
+        </div>
+      </div>
+
+      <div className="field-row">
+        <div>
+          <label>Contact Phone</label>
+          <input name="contact_phone" value={form.contact_phone} onChange={onChange} />
+        </div>
+        <div>
+          <label>Contact Email</label>
+          <input type="email" name="contact_email" value={form.contact_email} onChange={onChange} />
+        </div>
+      </div>
+
+      <label>Notes</label>
+      <textarea name="notes" value={form.notes} onChange={onChange} rows={4} />
+    </>
+  );
+}
+
+function MemorialFormFields({ form, onChange, onPhotoNamesChange }) {
+  return (
+    <>
+      <label>Name On Stone</label>
+      <input
+        name="name_on_stone"
+        value={form.name_on_stone}
+        onChange={onChange}
+        placeholder="John H. Andrews Bench"
+      />
+
+      <div className="field-row">
+        <div>
+          <label>Stone Type</label>
+          <select name="material" value={form.material} onChange={onChange}>
+            {MATERIAL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label>Style</label>
+          <input
+            name="stone_style"
+            value={form.stone_style}
+            onChange={onChange}
+            placeholder="Flat, slab, upright..."
+          />
+        </div>
+      </div>
+
+      <div className="field-row checkbox-row">
+        <label className="checkbox-card">
+          <input type="checkbox" name="has_plaque" checked={Boolean(form.has_plaque)} onChange={onChange} />
+          <span>Has plaque</span>
+        </label>
+        <label className="checkbox-card">
+          <input type="checkbox" name="has_paint" checked={Boolean(form.has_paint)} onChange={onChange} />
+          <span>Has paint</span>
+        </label>
+      </div>
+
+      <div className="field-row">
+        <div>
+          <label>Stone Location</label>
+          <input
+            name="location_description"
+            value={form.location_description}
+            onChange={onChange}
+            placeholder="Section, row, landmarks..."
+          />
+        </div>
+        <div>
+          <label>Approximate Age</label>
+          <input
+            type="number"
+            min="0"
+            name="age_years"
+            value={form.age_years}
+            onChange={onChange}
+            placeholder="Years"
+          />
+        </div>
+      </div>
+
+      <label>Vases / Flowers / Decorations</label>
+      <textarea name="decoration_notes" value={form.decoration_notes} onChange={onChange} rows={3} />
+
+      <label>Previous Cleans / Restoration Notes</label>
+      <textarea
+        name="previous_cleaning_notes"
+        value={form.previous_cleaning_notes}
+        onChange={onChange}
+        rows={3}
+      />
+
+      <label>Additional Notes</label>
+      <textarea name="notes" value={form.notes} onChange={onChange} rows={4} />
+
+      <label>Reference Photos</label>
+      <input
+        type="file"
+        multiple
+        onChange={(event) => {
+          const names = Array.from(event.target.files || []).map((file) => file.name);
+          onPhotoNamesChange(names);
+        }}
+      />
+      {form.photo_names.length > 0 && (
+        <div className="detail-pill-row">
+          {form.photo_names.map((name) => (
+            <span key={name} className="detail-pill">{name}</span>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function DashboardPageModern() {
+  const { loading, error, summary, upcoming, recent } = useDashboardData(true);
+  const servicesState = useApi('/scheduling/services/', [], true, { refreshEvent: 'hs:schedule-updated' });
+  const workflowStore = useWorkflowStore();
+  const revenueRows = useMemo(
+    () => buildRevenueChartRows(recent, servicesState.data || []),
+    [recent, servicesState.data]
+  );
+
+  const stats = [
+    {
+      label: 'Total Revenue',
+      value: summary ? formatCurrency(summary.total_revenue || 0) : '-',
+      sub: summary ? 'Completed work already collected' : 'Awaiting data'
+    },
+    {
+      label: 'Projected Revenue',
+      value: summary ? formatCurrency(summary.projected_revenue || 0) : '-',
+      sub: summary ? 'Scheduled work still in the pipeline' : 'Awaiting data'
+    },
+    {
+      label: 'Active Services',
+      value: summary?.active_services ?? '-',
+      sub: summary ? `${summary.services_today} on the calendar today` : 'Awaiting data'
+    },
+    {
+      label: 'Onboarding Queue',
+      value: workflowStore.localMemorials.length,
+      sub: workflowStore.localMemorials.length ? 'Memorial intake records saved in the UI' : 'No local memorial intake drafts'
+    }
+  ];
+
+  return (
+    <>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          <p className="page-subtitle">Overview of restoration activity, revenue, onboarding, and service timing.</p>
+        </div>
+        <button className="primary-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+          Onboard Customer
+        </button>
+      </div>
+
+      {(error || servicesState.error) && (
+        <div className="card warn">Backend error: {error || servicesState.error}</div>
+      )}
+
+      <section className="kpis">
+        {stats.map((stat) => (
+          <div key={stat.label} className="kpi">
+            <span className="kpi-label">{stat.label}</span>
+            <strong>{stat.value}</strong>
+            <small className={stat.label.includes('Revenue') ? 'positive' : ''}>{stat.sub}</small>
+          </div>
+        ))}
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Upcoming Services</h3>
+            <button className="ghost-btn" type="button" onClick={() => { window.location.hash = getSchedulingPathForCurrentRole(); }}>
+              View Calendar
+            </button>
+          </div>
+          {loading && <p className="meta">Loading from backend...</p>}
+          {!loading && upcoming.length === 0 && <p className="meta">No upcoming services scheduled.</p>}
+          {!loading && upcoming.length > 0 && (
+            <ul className="service-list">
+              {upcoming.map((svc) => (
+                <li key={svc.id}>
+                  <strong>{svc.memorial_name || `Service #${svc.id}`}</strong>
+                  <span>{svc.cemetery_name || 'Scheduled location'}</span>
+                  <div className="meta">Service date: {formatDateTimeShort(svc.scheduled_start)}</div>
+                  <div className="meta">{svc.status_display || svc.status || 'Scheduled'}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Monthly Revenue</h3>
+            <span className="meta">Collected vs scheduled snapshot</span>
+          </div>
+          <RevenueSnapshotChart rows={revenueRows} />
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <h3>Recently Completed</h3>
           <table>
             <thead>
               <tr>
                 <th>Memorial</th>
                 <th>Cemetery</th>
-                <th>Plan</th>
-                <th>Next Service</th>
+                <th>Date</th>
+                <th>Amount</th>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td>Smith Family Headstone</td>
-                <td>Greenwood Cemetery</td>
-                <td>Annual Maintenance</td>
-                <td>10/12/23</td>
-              </tr>
+              {loading && <tr><td colSpan="4" className="meta">Loading...</td></tr>}
+              {!loading && recent.length === 0 && <tr><td colSpan="4" className="meta">No completed services yet.</td></tr>}
+              {!loading && recent.map((svc) => (
+                <tr key={svc.id}>
+                  <td>{svc.memorial_name}</td>
+                  <td>{svc.cemetery_name || '-'}</td>
+                  <td>{formatDateOnly(svc.completed_date)}</td>
+                  <td>{svc.amount != null ? formatCurrency(Number(svc.amount)) : '-'}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
-      </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Customer Journey</h3>
+            <button className="ghost-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+              Open Intake
+            </button>
+          </div>
+          <p className="meta">Use onboarding to create a customer, attach a stone, and keep repeat memorial work nested under the same account.</p>
+          <div className="compact-stack">
+            <div className="queue-row">
+              <strong>{workflowStore.localMemorials.length}</strong>
+              <span>Memorial records added from the frontend workflow and ready for review.</span>
+            </div>
+            <div className="queue-row">
+              <strong>{summary?.services_today ?? 0}</strong>
+              <span>Service visits are already planned for today.</span>
+            </div>
+            <div className="queue-row">
+              <strong>{upcoming.length}</strong>
+              <span>Upcoming visits now show the service date directly on the dashboard.</span>
+            </div>
+          </div>
+        </div>
+      </section>
     </>
   );
 }
 
-function CustomerSettingsPage() {
+function FrontDeskDashboardPageModern() {
+  const { loading, error, summary, upcoming, recent } = useDashboardData(true);
+  const customerState = useApi('/manage/customers/', [], true, { refreshEvent: 'hs:customers-updated' });
+  const memorialState = useApi('/memorials/', []);
+  const cemeteryState = useApi('/cemeteries/', []);
+  const servicesState = useApi('/scheduling/services/', [], true, { refreshEvent: 'hs:schedule-updated' });
+  const workflowStore = useWorkflowStore();
+  const memorials = useMemo(
+    () => buildMergedMemorials(memorialState.data || [], workflowStore),
+    [memorialState.data, workflowStore]
+  );
+  const customers = useMemo(
+    () => buildMergedCustomers(customerState.data || [], memorials, workflowStore),
+    [customerState.data, memorials, workflowStore]
+  );
+  const cemeteries = useMemo(
+    () => buildMergedCemeteries(cemeteryState.data || [], memorials, workflowStore),
+    [cemeteryState.data, memorials, workflowStore]
+  );
+  const revenueRows = useMemo(
+    () => buildRevenueChartRows(recent, servicesState.data || []),
+    [recent, servicesState.data]
+  );
+  const unscheduledServices = (servicesState.data || []).filter((service) => !service.scheduled_start || service.status === 'draft');
+
   return (
     <>
-      <h1 className="page-title">Settings</h1>
-      <p className="page-subtitle">Notification preferences and account details.</p>
-
-      <div className="card form">
-        <label>Email</label>
-        <input type="email" placeholder="name@example.com" />
-
-        <label>Phone</label>
-        <input type="tel" placeholder="(555) 123-4567" />
-
-        <label>Notification Frequency</label>
-        <select>
-          <option>Immediately</option>
-          <option>Daily Digest</option>
-          <option>Weekly Summary</option>
-        </select>
-
-        <button className="primary-btn">Save Preferences</button>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Front Desk Dashboard</h1>
+          <p className="page-subtitle">Daily control center for onboarding, scheduling, customer follow-up, and cemetery visibility.</p>
+        </div>
+        <button className="primary-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+          Onboard Customer
+        </button>
       </div>
+
+      {(error || customerState.error || memorialState.error || cemeteryState.error || servicesState.error) && (
+        <div className="card warn">
+          Backend error: {error || customerState.error || memorialState.error || cemeteryState.error || servicesState.error}
+        </div>
+      )}
+
+      <section className="kpis">
+        <div className="kpi">
+          <span className="kpi-label">Customers</span>
+          <strong>{customers.length || '-'}</strong>
+          <small>Active records available to the front desk</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Memorials</span>
+          <strong>{memorials.length || '-'}</strong>
+          <small>Stone records including local intake additions</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Unscheduled Jobs</span>
+          <strong>{unscheduledServices.length || '-'}</strong>
+          <small>Still need front desk action</small>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Cemeteries</span>
+          <strong>{cemeteries.length || '-'}</strong>
+          <small>Known locations with memorial records</small>
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Quick Actions</h3>
+            <span className="meta">Most-used workflow shortcuts</span>
+          </div>
+          <div className="quick-links">
+            <button className="quick-link-card quick-link-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+              <strong>Onboard Customer</strong>
+              <span>Create a customer and attach a new stone record.</span>
+            </button>
+            <a className="quick-link-card" href="#/frontdesk/customers">
+              <strong>Customer Records</strong>
+              <span>Update contact info and add stones under an existing customer.</span>
+            </a>
+            <a className="quick-link-card" href="#/frontdesk/scheduling">
+              <strong>Scheduling</strong>
+              <span>Open the calendar and assign the service queue.</span>
+            </a>
+            <a className="quick-link-card" href="#/frontdesk/cemeteries">
+              <strong>Cemeteries</strong>
+              <span>Review cemetery info and all stones serviced there.</span>
+            </a>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Monthly Revenue</h3>
+            <span className="meta">Collected vs scheduled snapshot</span>
+          </div>
+          <RevenueSnapshotChart rows={revenueRows} />
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Upcoming Services</h3>
+            <a className="ghost-btn" href="#/frontdesk/scheduling">View All</a>
+          </div>
+          {loading && <p className="meta">Loading upcoming services...</p>}
+          {!loading && upcoming.length === 0 && <p className="meta">No upcoming services scheduled.</p>}
+          {!loading && upcoming.length > 0 && (
+            <ul className="service-list">
+              {upcoming.map((service) => (
+                <li key={service.id}>
+                  <strong>{service.memorial_name || `Service #${service.id}`}</strong>
+                  <span>{service.cemetery_name || 'No cemetery'}</span>
+                  <div className="meta">Service date: {formatDateTimeShort(service.scheduled_start)}</div>
+                  <div className="meta">{service.status_display || service.status}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Service Snapshot</h3>
+            <span className="meta">Front desk priorities right now</span>
+          </div>
+          <div className="compact-stack">
+            <div className="queue-row">
+              <strong>{workflowStore.localMemorials.length}</strong>
+              <span>New memorial intake records were added through the frontend workflow.</span>
+            </div>
+            <div className="queue-row">
+              <strong>{summary?.services_today ?? 0}</strong>
+              <span>Services are on the schedule for today.</span>
+            </div>
+            <div className="queue-row">
+              <strong>{unscheduledServices.length}</strong>
+              <span>Jobs still need scheduling or technician assignment.</span>
+            </div>
+          </div>
+        </div>
+      </section>
     </>
   );
 }
 
-function TestingLoginPage({ onSignIn }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [destinationRole, setDestinationRole] = useState('admin');
-  const [errorMessage, setErrorMessage] = useState('');
+function MemorialsPageModern() {
+  const memorialState = useApi('/memorials/', []);
+  const workflowStore = useWorkflowStore();
+  const memorials = useMemo(
+    () => buildMergedMemorials(memorialState.data || [], workflowStore),
+    [memorialState.data, workflowStore]
+  );
+  const [selectedId, setSelectedId] = useState('');
+  const [editor, setEditor] = useState(createMemorialFormState());
+  const [saveState, setSaveState] = useState({ error: '', success: '' });
 
-  function handleSubmit(event) {
+  useEffect(() => {
+    if (!memorials.length) {
+      setSelectedId('');
+      return;
+    }
+    const exists = memorials.some((row) => String(row.id) === String(selectedId));
+    if (!exists) setSelectedId(String(memorials[0].id));
+  }, [memorials, selectedId]);
+
+  const selectedMemorial = useMemo(
+    () => memorials.find((row) => String(row.id) === String(selectedId)) || null,
+    [memorials, selectedId]
+  );
+
+  useEffect(() => {
+    if (!selectedMemorial) return;
+    setEditor(createMemorialFormState(selectedMemorial));
+    setSaveState({ error: '', success: '' });
+  }, [selectedMemorial]);
+
+  function handleSave(event) {
     event.preventDefault();
-    const trimmedEmail = email.trim();
-
-    if (!trimmedEmail || !password) {
-      setErrorMessage('Email and password are required.');
-      return;
+    if (!selectedMemorial) return;
+    if (selectedMemorial.source === 'local') {
+      upsertLocalMemorial({ ...selectedMemorial, ...editor });
+    } else {
+      saveMemorialMeta(selectedMemorial.id, {
+        name_on_stone: editor.name_on_stone,
+        material: editor.material,
+        stone_style: editor.stone_style,
+        has_plaque: editor.has_plaque,
+        has_paint: editor.has_paint,
+        decoration_notes: editor.decoration_notes,
+        location_description: editor.location_description,
+        age_years: editor.age_years,
+        previous_cleaning_notes: editor.previous_cleaning_notes,
+        notes: editor.notes,
+        photo_names: editor.photo_names,
+        regional_team: editor.regional_team
+      });
     }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setErrorMessage('Enter a valid email address.');
-      return;
-    }
-
-    const result = onSignIn({
-      email: trimmedEmail,
-      password,
-      destinationRole
-    });
-
-    if (!result || result.error) {
-      setErrorMessage(result && result.error ? result.error : 'Unable to sign in.');
-      return;
-    }
-
-    setErrorMessage('');
+    setSaveState({ error: '', success: 'Memorial details saved.' });
   }
 
   return (
     <>
-      <h1 className="page-title">Login</h1>
-      <p className="page-subtitle">Testing login screen for role and account access.</p>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Memorials</h1>
+          <p className="page-subtitle">Stone-focused records with clearer field grouping and a dedicated service snapshot.</p>
+        </div>
+        <button className="primary-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+          Add Memorial
+        </button>
+      </div>
 
-      <form className="card form auth-card" onSubmit={handleSubmit}>
-        {errorMessage && <p className="form-error">{errorMessage}</p>}
+      {memorialState.error && <div className="card warn">Backend error: {memorialState.error}</div>}
 
-        <label>Email</label>
-        <input
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          placeholder="name@example.com"
-          required
-        />
+      <section className="grid-2 memorials-workspace">
+        <div className="card">
+          <div className="card-header">
+            <h3>Memorial Library</h3>
+            <span className="meta">{memorials.length} records</span>
+          </div>
+          {memorialState.loading && <p className="meta">Loading memorials...</p>}
+          {!memorialState.loading && memorials.length === 0 && <p className="meta">No memorials yet.</p>}
+          {!memorialState.loading && memorials.length > 0 && (
+            <div className="record-stack">
+              {memorials.map((memorial) => (
+                <button
+                  key={memorial.id}
+                  type="button"
+                  className={`record-card${String(selectedId) === String(memorial.id) ? ' active' : ''}`}
+                  onClick={() => setSelectedId(String(memorial.id))}
+                >
+                  <div className="record-card-header">
+                    <span className="stone-chip">Stone Record</span>
+                    <span className="meta">{memorial.material_label}</span>
+                  </div>
+                  <strong>{memorial.name_on_stone || memorial.customer || 'Memorial record'}</strong>
+                  <span>{memorial.cemetery || 'No cemetery listed'}</span>
+                  <div className="record-card-meta">
+                    <span>Customer: {memorial.customer || 'Unknown'}</span>
+                    <span>Last service: {memorial.last_service_date ? formatDateOnly(memorial.last_service_date) : 'Not logged'}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
-        <label>Password</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="Enter password"
-          required
-        />
+        <div className="card">
+          {!selectedMemorial && <p className="meta">Select a memorial to review the stone details.</p>}
+          {selectedMemorial && (
+            <>
+              <div className="memorial-hero">
+                <div>
+                  <div className="detail-kicker">Memorial detail</div>
+                  <h3>{editor.name_on_stone || selectedMemorial.customer || 'Memorial record'}</h3>
+                  <p className="meta">{getMaterialLabel(editor.material)}{editor.stone_style ? ` | ${editor.stone_style}` : ''}</p>
+                </div>
+                <div className="detail-pill-row">
+                  <span className="detail-pill">{selectedMemorial.cemetery || 'No cemetery'}</span>
+                  <span className="detail-pill">{selectedMemorial.customer || 'No customer'}</span>
+                </div>
+              </div>
 
-        <label>Sign in As</label>
-        <select value={destinationRole} onChange={(event) => setDestinationRole(event.target.value)}>
-          <option value="admin">Admin</option>
-          <option value="employee">Employee</option>
-          <option value="customer">Customer</option>
-        </select>
+              <div className="detail-grid">
+                <div className="detail-card">
+                  <span className="detail-label">Service Snapshot</span>
+                  <strong>{selectedMemorial.last_service_date ? formatDateOnly(selectedMemorial.last_service_date) : 'Not scheduled yet'}</strong>
+                  <p>Regional team: {editor.regional_team || selectedMemorial.regional_team || 'Scheduling team'}</p>
+                </div>
+                <div className="detail-card">
+                  <span className="detail-label">Stone Location</span>
+                  <strong>{editor.location_description || 'Capture location details here'}</strong>
+                  <p>{editor.photo_names.length ? `${editor.photo_names.length} reference photo names saved` : 'No reference photo names saved yet'}</p>
+                </div>
+              </div>
 
-        <button type="submit" className="primary-btn">Sign In</button>
+              <form className="form" onSubmit={handleSave}>
+                <MemorialFormFields
+                  form={editor}
+                  onChange={(event) => handleDraftFieldChange(setEditor, event)}
+                  onPhotoNamesChange={(photoNames) => setEditor((prev) => ({ ...prev, photo_names: photoNames }))}
+                />
+                {saveState.error && <div className="form-error">{saveState.error}</div>}
+                {saveState.success && <div className="card form-success"><strong>{saveState.success}</strong></div>}
+                <button className="primary-btn" type="submit">Save Memorial Details</button>
+              </form>
+            </>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function CustomersPageModern() {
+  const customerState = useApi('/manage/customers/', [], true, { refreshEvent: 'hs:customers-updated' });
+  const memorialState = useApi('/memorials/', []);
+  const workflowStore = useWorkflowStore();
+  const memorials = useMemo(
+    () => buildMergedMemorials(memorialState.data || [], workflowStore),
+    [memorialState.data, workflowStore]
+  );
+  const customers = useMemo(
+    () => buildMergedCustomers(customerState.data || [], memorials, workflowStore),
+    [customerState.data, memorials, workflowStore]
+  );
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(createCustomerFormState());
+  const [saveState, setSaveState] = useState({ loading: false, error: '', success: '' });
+
+  useEffect(() => {
+    if (!customers.length) {
+      setSelectedCustomerId('');
+      return;
+    }
+    const exists = customers.some((row) => String(row.id) === String(selectedCustomerId));
+    if (!exists) {
+      setSelectedCustomerId(String(customers[0].id));
+      setEditingId(customers[0].id);
+      setForm(createCustomerFormState(customers[0]));
+    }
+  }, [customers, selectedCustomerId]);
+
+  function startCreate() {
+    setEditingId(null);
+    setSelectedCustomerId('');
+    setForm(createCustomerFormState());
+    setSaveState({ loading: false, error: '', success: '' });
+  }
+
+  function startEdit(customer) {
+    setEditingId(customer.id);
+    setSelectedCustomerId(String(customer.id));
+    setForm(createCustomerFormState(customer));
+    setSaveState({ loading: false, error: '', success: '' });
+  }
+
+  const selectedCustomer = useMemo(
+    () => customers.find((customer) => String(customer.id) === String(selectedCustomerId)) || null,
+    [customers, selectedCustomerId]
+  );
+
+  const selectedCustomerMemorials = useMemo(
+    () => memorials.filter((memorial) => selectedCustomer && matchesCustomerRecord(memorial, selectedCustomer)),
+    [memorials, selectedCustomer]
+  );
+
+  async function handleSave(event) {
+    event.preventDefault();
+    setSaveState({ loading: true, error: '', success: '' });
+    try {
+      const payload = {
+        full_name: form.full_name,
+        email: form.email,
+        phone: form.phone,
+        address_line1: form.address_line1,
+        address_line2: form.address_line2,
+        city: form.city,
+        state: form.state,
+        postal_code: form.postal_code,
+        notes: form.notes
+      };
+      const isEdit = Boolean(editingId);
+      const res = await apiFetch(isEdit ? `/manage/customers/${editingId}/` : '/manage/customers/', {
+        method: isEdit ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(formatApiError(json, `Save failed (${res.status})`));
+      saveCustomerMeta(json.customer.id, {
+        how_heard_about_us: form.how_heard_about_us,
+        address_line1: form.address_line1,
+        address_line2: form.address_line2,
+        city: form.city,
+        state: form.state,
+        postal_code: form.postal_code,
+        notes: form.notes
+      });
+      setEditingId(json.customer.id);
+      setSelectedCustomerId(String(json.customer.id));
+      setForm(createCustomerFormState({ ...form, ...json.customer }));
+      setSaveState({ loading: false, error: '', success: isEdit ? 'Customer updated.' : 'Customer created.' });
+      window.dispatchEvent(new Event('hs:customers-updated'));
+    } catch (err) {
+      setSaveState({ loading: false, error: err.message || 'Failed to save customer.', success: '' });
+    }
+  }
+
+  async function handleDelete(customerId) {
+    if (!window.confirm('Delete this customer?')) return;
+    setSaveState({ loading: true, error: '', success: '' });
+    try {
+      const res = await apiFetch(`/manage/customers/${customerId}/`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+      setSaveState({ loading: false, error: '', success: 'Customer deleted.' });
+      startCreate();
+      window.dispatchEvent(new Event('hs:customers-updated'));
+    } catch (err) {
+      setSaveState({ loading: false, error: err.message || 'Failed to delete customer.', success: '' });
+    }
+  }
+
+  return (
+    <>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Customers</h1>
+          <p className="page-subtitle">Manage contact records and add more stones under an existing customer profile.</p>
+        </div>
+        <button className="primary-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+          Onboard Customer
+        </button>
+      </div>
+
+      {(customerState.error || memorialState.error) && (
+        <div className="card warn">Backend error: {customerState.error || memorialState.error}</div>
+      )}
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>{editingId ? `Customer #${editingId}` : 'New Customer'}</h3>
+            <button className="ghost-btn" type="button" onClick={startCreate}>Clear</button>
+          </div>
+          <form className="form" onSubmit={handleSave}>
+            <CustomerFormFields form={form} onChange={(event) => handleDraftFieldChange(setForm, event)} />
+            {saveState.error && <div className="form-error">{saveState.error}</div>}
+            {saveState.success && <div className="card form-success"><strong>{saveState.success}</strong></div>}
+            <button className="primary-btn" type="submit" disabled={saveState.loading}>
+              {saveState.loading ? 'Saving...' : (editingId ? 'Save Customer' : 'Create Customer')}
+            </button>
+          </form>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Customer List</h3>
+            <span className="meta">{customers.length} records</span>
+          </div>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Memorials</th>
+                  <th>Email</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customerState.loading && <tr><td colSpan="4" className="meta">Loading customers...</td></tr>}
+                {!customerState.loading && customers.length === 0 && <tr><td colSpan="4" className="meta">No customers yet.</td></tr>}
+                {!customerState.loading && customers.map((customer) => (
+                  <tr key={customer.id}>
+                    <td>
+                      <strong>{customer.full_name}</strong>
+                      <div className="meta">{customer.how_heard_about_us || 'Referral source not captured yet'}</div>
+                    </td>
+                    <td>{customer.memorials_count || 0}</td>
+                    <td>{customer.email || '-'}</td>
+                    <td>
+                      <div className="table-action-cell">
+                        <button className="ghost-btn" type="button" onClick={() => startEdit(customer)}>Edit</button>
+                        <button
+                          className="ghost-btn"
+                          type="button"
+                          onClick={() => openOnboardingWorkflow({
+                            existing_customer_id: customer.id,
+                            customer_name: customer.full_name
+                          })}
+                        >
+                          Add Stone
+                        </button>
+                        <button className="ghost-btn" type="button" onClick={() => handleDelete(customer.id)}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>Selected Customer</h3>
+            {selectedCustomer && (
+              <button
+                className="ghost-btn"
+                type="button"
+                onClick={() => openOnboardingWorkflow({
+                  existing_customer_id: selectedCustomer.id,
+                  customer_name: selectedCustomer.full_name
+                })}
+              >
+                Add Memorial
+              </button>
+            )}
+          </div>
+          {!selectedCustomer && <p className="meta">Select a customer to review their profile.</p>}
+          {selectedCustomer && (
+            <div className="detail-grid">
+              <div className="detail-card">
+                <span className="detail-label">Contact</span>
+                <strong>{selectedCustomer.full_name}</strong>
+                <p>{selectedCustomer.email || 'No email saved'}</p>
+                <p>{selectedCustomer.phone || 'No phone saved'}</p>
+              </div>
+              <div className="detail-card">
+                <span className="detail-label">Referral Source</span>
+                <strong>{selectedCustomer.how_heard_about_us || 'Not captured'}</strong>
+                <p>{selectedCustomer.last_contact ? `Last contact ${formatDateOnly(selectedCustomer.last_contact)}` : 'No last contact logged'}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>Memorials Under This Customer</h3>
+          {!selectedCustomer && <p className="meta">Select a customer first.</p>}
+          {selectedCustomer && selectedCustomerMemorials.length === 0 && (
+            <p className="meta">No memorials are attached to this customer yet.</p>
+          )}
+          {selectedCustomer && selectedCustomerMemorials.length > 0 && (
+            <div className="record-stack compact-record-stack">
+              {selectedCustomerMemorials.map((memorial) => (
+                <div key={memorial.id} className="record-card record-card-static">
+                  <div className="record-card-header">
+                    <span className="stone-chip">Stone</span>
+                    <span className="meta">{memorial.material_label}</span>
+                  </div>
+                  <strong>{memorial.name_on_stone || memorial.customer || 'Memorial record'}</strong>
+                  <span>{memorial.cemetery || 'No cemetery listed'}</span>
+                  <div className="record-card-meta">
+                    <span>{memorial.location_description || 'Location details not captured yet'}</span>
+                    <span>{memorial.last_service_date ? `Last service ${formatDateOnly(memorial.last_service_date)}` : 'No service logged'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function CemeteriesPageModern() {
+  const cemeteryState = useApi('/cemeteries/', []);
+  const memorialState = useApi('/memorials/', []);
+  const workflowStore = useWorkflowStore();
+  const memorials = useMemo(
+    () => buildMergedMemorials(memorialState.data || [], workflowStore),
+    [memorialState.data, workflowStore]
+  );
+  const cemeteries = useMemo(
+    () => buildMergedCemeteries(cemeteryState.data || [], memorials, workflowStore),
+    [cemeteryState.data, memorials, workflowStore]
+  );
+  const [selectedCemeteryId, setSelectedCemeteryId] = useState('');
+  const [form, setForm] = useState(createCemeteryFormState());
+  const [saveState, setSaveState] = useState({ success: '' });
+
+  useEffect(() => {
+    if (!cemeteries.length) return;
+    const exists = cemeteries.some((row) => String(row.id) === String(selectedCemeteryId));
+    if (!exists) {
+      setSelectedCemeteryId(String(cemeteries[0].id));
+      setForm(createCemeteryFormState(cemeteries[0]));
+    }
+  }, [cemeteries, selectedCemeteryId]);
+
+  const selectedCemetery = useMemo(
+    () => cemeteries.find((cemetery) => String(cemetery.id) === String(selectedCemeteryId)) || null,
+    [cemeteries, selectedCemeteryId]
+  );
+
+  useEffect(() => {
+    if (!selectedCemetery) return;
+    setForm(createCemeteryFormState(selectedCemetery));
+    setSaveState({ success: '' });
+  }, [selectedCemetery]);
+
+  const cemeteryMemorials = useMemo(
+    () => memorials.filter((memorial) => selectedCemetery && matchesCemeteryRecord(memorial, selectedCemetery)),
+    [memorials, selectedCemetery]
+  );
+
+  function handleSave(event) {
+    event.preventDefault();
+    const nextRecord = { ...form };
+    if (!nextRecord.id) {
+      nextRecord.id = makeLocalId('cemetery');
+      upsertLocalCemetery(nextRecord);
+      setSelectedCemeteryId(String(nextRecord.id));
+    } else if (String(nextRecord.id).startsWith('local-')) {
+      upsertLocalCemetery(nextRecord);
+    } else {
+      saveCemeteryMeta(nextRecord.id, nextRecord);
+    }
+    setSaveState({ success: 'Cemetery details saved.' });
+  }
+
+  return (
+    <>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Cemeteries</h1>
+          <p className="page-subtitle">Capture the cemetery info first, then review every stone serviced inside that location.</p>
+        </div>
+        <button className="primary-btn" type="button" onClick={() => openOnboardingWorkflow()}>
+          Add Stone Intake
+        </button>
+      </div>
+
+      {(cemeteryState.error || memorialState.error) && (
+        <div className="card warn">Backend error: {cemeteryState.error || memorialState.error}</div>
+      )}
+
+      <section className="grid-2">
+        <div className="card">
+          <div className="card-header">
+            <h3>{form.id ? 'Cemetery Details' : 'New Cemetery'}</h3>
+            <button
+              className="ghost-btn"
+              type="button"
+              onClick={() => {
+                setSelectedCemeteryId('');
+                setForm(createCemeteryFormState());
+              }}
+            >
+              New
+            </button>
+          </div>
+          <form className="form" onSubmit={handleSave}>
+            <CemeteryFormFields form={form} onChange={(event) => handleDraftFieldChange(setForm, event)} />
+            {saveState.success && <div className="card form-success"><strong>{saveState.success}</strong></div>}
+            <button className="primary-btn" type="submit">Save Cemetery</button>
+          </form>
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Cemetery List</h3>
+            <span className="meta">{cemeteries.length} locations</span>
+          </div>
+          <div className="record-stack">
+            {cemeteries.map((cemetery) => (
+              <button
+                key={cemetery.id}
+                type="button"
+                className={`record-card${String(selectedCemeteryId) === String(cemetery.id) ? ' active' : ''}`}
+                onClick={() => setSelectedCemeteryId(String(cemetery.id))}
+              >
+                <strong>{cemetery.name}</strong>
+                <span>{[cemetery.city, cemetery.state].filter(Boolean).join(', ') || 'City and state not captured yet'}</span>
+                <div className="record-card-meta">
+                  <span>{cemetery.address || 'No address saved'}</span>
+                  <span>{cemetery.memorials_count || 0} stones</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="card">
+        <div className="card-header">
+          <h3>Stones In This Cemetery</h3>
+          <span className="meta">Customer info intentionally hidden here</span>
+        </div>
+        {!selectedCemetery && <p className="meta">Select a cemetery first.</p>}
+        {selectedCemetery && cemeteryMemorials.length === 0 && (
+          <p className="meta">No stones are attached to this cemetery yet.</p>
+        )}
+        {selectedCemetery && cemeteryMemorials.length > 0 && (
+          <div className="record-stack compact-record-stack">
+            {cemeteryMemorials.map((memorial) => (
+              <div key={memorial.id} className="record-card record-card-static">
+                <div className="record-card-header">
+                  <span className="stone-chip">Stone</span>
+                  <span className="meta">{memorial.material_label}</span>
+                </div>
+                <strong>{memorial.name_on_stone || 'Memorial record'}</strong>
+                <span>{memorial.location_description || 'Location details not captured yet'}</span>
+                <div className="record-card-meta">
+                  <span>{memorial.stone_style || 'Style not captured'}</span>
+                  <span>{memorial.last_service_date ? `Last service ${formatDateOnly(memorial.last_service_date)}` : 'No service logged'}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function OnboardingPageModern() {
+  const customerState = useApi('/manage/customers/', [], true, { refreshEvent: 'hs:customers-updated' });
+  const cemeteryState = useApi('/cemeteries/', []);
+  const workflowStore = useWorkflowStore();
+  const draft = useMemo(() => readOnboardingDraft(), []);
+  const cemeteries = useMemo(
+    () => buildMergedCemeteries(cemeteryState.data || [], [], workflowStore),
+    [cemeteryState.data, workflowStore]
+  );
+  const customers = Array.isArray(customerState.data) ? customerState.data : [];
+  const [customerMode, setCustomerMode] = useState(draft.existing_customer_id ? 'existing' : 'new');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(String(draft.existing_customer_id || ''));
+  const [customerForm, setCustomerForm] = useState(createCustomerFormState({
+    full_name: draft.customer_name || ''
+  }));
+  const [cemeteryMode, setCemeteryMode] = useState(draft.existing_cemetery_id ? 'existing' : 'new');
+  const [selectedCemeteryId, setSelectedCemeteryId] = useState(String(draft.existing_cemetery_id || ''));
+  const [cemeteryForm, setCemeteryForm] = useState(createCemeteryFormState());
+  const [memorialForm, setMemorialForm] = useState(createMemorialFormState());
+  const [submitState, setSubmitState] = useState({ loading: false, error: '', success: '' });
+
+  function handleClearDraft() {
+    clearOnboardingDraft();
+    setCustomerMode('new');
+    setSelectedCustomerId('');
+    setCustomerForm(createCustomerFormState());
+    setCemeteryMode('new');
+    setSelectedCemeteryId('');
+    setCemeteryForm(createCemeteryFormState());
+    setMemorialForm(createMemorialFormState());
+    setSubmitState({ loading: false, error: '', success: '' });
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSubmitState({ loading: true, error: '', success: '' });
+    try {
+      let customerRecord = null;
+
+      if (customerMode === 'existing') {
+        customerRecord = customers.find((customer) => String(customer.id) === String(selectedCustomerId)) || null;
+        if (!customerRecord) throw new Error('Select an existing customer.');
+      } else {
+        const payload = {
+          full_name: customerForm.full_name,
+          email: customerForm.email,
+          phone: customerForm.phone,
+          address_line1: customerForm.address_line1,
+          address_line2: customerForm.address_line2,
+          city: customerForm.city,
+          state: customerForm.state,
+          postal_code: customerForm.postal_code,
+          notes: customerForm.notes
+        };
+        const res = await apiFetch('/manage/customers/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(formatApiError(json, `Create failed (${res.status})`));
+        customerRecord = json.customer;
+        window.dispatchEvent(new Event('hs:customers-updated'));
+      }
+
+      saveCustomerMeta(customerRecord.id, {
+        how_heard_about_us: customerForm.how_heard_about_us,
+        address_line1: customerForm.address_line1,
+        address_line2: customerForm.address_line2,
+        city: customerForm.city,
+        state: customerForm.state,
+        postal_code: customerForm.postal_code,
+        notes: customerForm.notes
+      });
+
+      let cemeteryRecord = null;
+      if (cemeteryMode === 'existing') {
+        cemeteryRecord = cemeteries.find((cemetery) => String(cemetery.id) === String(selectedCemeteryId)) || null;
+        if (!cemeteryRecord) throw new Error('Select an existing cemetery.');
+      } else {
+        cemeteryRecord = {
+          ...cemeteryForm,
+          id: cemeteryForm.id || makeLocalId('cemetery')
+        };
+        upsertLocalCemetery(cemeteryRecord);
+      }
+
+      const memorialRecord = {
+        ...memorialForm,
+        id: makeLocalId('memorial'),
+        customer_id: customerRecord.id,
+        customer: customerRecord.full_name,
+        cemetery_id: cemeteryRecord.id,
+        cemetery: cemeteryRecord.name,
+        name_on_stone: memorialForm.name_on_stone || customerRecord.full_name
+      };
+      upsertLocalMemorial(memorialRecord);
+      clearOnboardingDraft();
+      setSubmitState({ loading: false, error: '', success: 'Customer and memorial intake saved.' });
+      setCustomerMode('new');
+      setSelectedCustomerId('');
+      setCustomerForm(createCustomerFormState());
+      setCemeteryMode('new');
+      setSelectedCemeteryId('');
+      setCemeteryForm(createCemeteryFormState());
+      setMemorialForm(createMemorialFormState());
+    } catch (err) {
+      setSubmitState({ loading: false, error: err.message || 'Failed to save onboarding.', success: '' });
+    }
+  }
+
+  return (
+    <>
+      <div className="page-heading page-heading-actions">
+        <div>
+          <h1 className="page-title">Onboarding</h1>
+          <p className="page-subtitle">Create a customer, capture how they found you, and attach a stone under the right cemetery.</p>
+        </div>
+        <button className="ghost-btn" type="button" onClick={handleClearDraft}>Clear Draft</button>
+      </div>
+
+      {(customerState.error || cemeteryState.error) && (
+        <div className="card warn">Backend error: {customerState.error || cemeteryState.error}</div>
+      )}
+
+      <form className="form" onSubmit={handleSubmit}>
+        <section className="grid-2">
+          <div className="card">
+            <div className="card-header">
+              <h3>Customer</h3>
+              <div className="toggle-group">
+                <button
+                  type="button"
+                  className={`toggle-btn${customerMode === 'new' ? ' active' : ''}`}
+                  onClick={() => setCustomerMode('new')}
+                >
+                  New
+                </button>
+                <button
+                  type="button"
+                  className={`toggle-btn${customerMode === 'existing' ? ' active' : ''}`}
+                  onClick={() => setCustomerMode('existing')}
+                >
+                  Existing
+                </button>
+              </div>
+            </div>
+            {customerMode === 'existing' && (
+              <>
+                <label>Existing Customer</label>
+                <select value={selectedCustomerId} onChange={(event) => setSelectedCustomerId(event.target.value)} required>
+                  <option value="">Select customer</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.full_name}</option>
+                  ))}
+                </select>
+                <label>How They Heard About Us</label>
+                <input
+                  name="how_heard_about_us"
+                  value={customerForm.how_heard_about_us}
+                  onChange={(event) => handleDraftFieldChange(setCustomerForm, event)}
+                />
+              </>
+            )}
+            {customerMode === 'new' && (
+              <CustomerFormFields form={customerForm} onChange={(event) => handleDraftFieldChange(setCustomerForm, event)} />
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-header">
+              <h3>Cemetery</h3>
+              <div className="toggle-group">
+                <button
+                  type="button"
+                  className={`toggle-btn${cemeteryMode === 'existing' ? ' active' : ''}`}
+                  onClick={() => setCemeteryMode('existing')}
+                >
+                  Existing
+                </button>
+                <button
+                  type="button"
+                  className={`toggle-btn${cemeteryMode === 'new' ? ' active' : ''}`}
+                  onClick={() => setCemeteryMode('new')}
+                >
+                  New
+                </button>
+              </div>
+            </div>
+            {cemeteryMode === 'existing' && (
+              <>
+                <label>Existing Cemetery</label>
+                <select value={selectedCemeteryId} onChange={(event) => setSelectedCemeteryId(event.target.value)} required>
+                  <option value="">Select cemetery</option>
+                  {cemeteries.map((cemetery) => (
+                    <option key={cemetery.id} value={cemetery.id}>{cemetery.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
+            {cemeteryMode === 'new' && (
+              <CemeteryFormFields form={cemeteryForm} onChange={(event) => handleDraftFieldChange(setCemeteryForm, event)} />
+            )}
+          </div>
+        </section>
+
+        <div className="card">
+          <h3>Stone Information</h3>
+          <MemorialFormFields
+            form={memorialForm}
+            onChange={(event) => handleDraftFieldChange(setMemorialForm, event)}
+            onPhotoNamesChange={(photoNames) => setMemorialForm((prev) => ({ ...prev, photo_names: photoNames }))}
+          />
+        </div>
+
+        {submitState.error && <div className="form-error">{submitState.error}</div>}
+        {submitState.success && <div className="card form-success"><strong>{submitState.success}</strong></div>}
+        <button className="primary-btn" type="submit" disabled={submitState.loading}>
+          {submitState.loading ? 'Saving...' : 'Save Onboarding Record'}
+        </button>
       </form>
     </>
   );
 }
 
-function CustomerAuthPage({ resetEmail, onLogin, onResetPassword, onCancelReset }) {
-  const [email, setEmail] = useState(resetEmail || '');
-  const [password, setPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [errorMessage, setErrorMessage] = useState('');
+ROUTES.admin.dashboard = DashboardPageModern;
+ROUTES.admin.memorials = MemorialsPageModern;
+ROUTES.admin.customers = CustomersPageModern;
+ROUTES.admin.cemeteries = CemeteriesPageModern;
+ROUTES.admin.onboarding = OnboardingPageModern;
+ROUTES.frontdesk.dashboard = FrontDeskDashboardPageModern;
+ROUTES.frontdesk.memorials = MemorialsPageModern;
+ROUTES.frontdesk.customers = CustomersPageModern;
+ROUTES.frontdesk.cemeteries = CemeteriesPageModern;
+ROUTES.frontdesk.onboarding = OnboardingPageModern;
 
-  const isResetFlow = Boolean(resetEmail);
-
-  useEffect(() => {
-    setEmail(resetEmail || '');
-    setPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    setErrorMessage('');
-  }, [resetEmail]);
-
-  function handleLoginSubmit(event) {
-    event.preventDefault();
-    const result = onLogin({
-      email,
-      password
-    });
-
-    if (!result || result.error) {
-      setErrorMessage(result && result.error ? result.error : 'Unable to log in.');
-      return;
-    }
-
-    setErrorMessage('');
-  }
-
-  function handleResetSubmit(event) {
-    event.preventDefault();
-
-    if (newPassword.trim().length < 8) {
-      setErrorMessage('New password must be at least 8 characters.');
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setErrorMessage('Passwords do not match.');
-      return;
-    }
-
-    const result = onResetPassword({
-      email: resetEmail,
-      newPassword
-    });
-
-    if (!result || result.error) {
-      setErrorMessage(result && result.error ? result.error : 'Unable to reset password.');
-      return;
-    }
-
-    setErrorMessage('');
-  }
-
+function LoginPage({ form, authState, onChange, onSubmit }) {
   return (
-    <>
-      <h1 className="page-title">Customer Login</h1>
-      <p className="page-subtitle">
-        {isResetFlow ? 'Reset your password to continue.' : 'Sign in to access customer views.'}
-      </p>
+    <div className="main main-login">
+      <header className="topbar topbar-login"></header>
+      <main className="content">
+        <h1 className="page-title">Login</h1>
+        <p className="page-subtitle">Sign in with your email or username and password.</p>
 
-      <form className="card form auth-card" onSubmit={isResetFlow ? handleResetSubmit : handleLoginSubmit}>
-        {errorMessage && <p className="form-error">{errorMessage}</p>}
-
-        {!isResetFlow && (
-          <>
-            <label>Email</label>
+        <div className="card auth-card">
+          <form className="form" onSubmit={onSubmit}>
+            <label>Email or Username</label>
             <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="name@example.com"
+              type="text"
+              name="email"
+              autoComplete="username"
+              value={form.email}
+              onChange={onChange}
               required
             />
 
             <label>Password</label>
             <input
               type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter password"
-              required
-            />
-          </>
-        )}
-
-        {isResetFlow && (
-          <>
-            <label>Email</label>
-            <input type="email" value={resetEmail} readOnly />
-
-            <label>New Password</label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              placeholder="At least 8 characters"
+              name="password"
+              autoComplete="current-password"
+              value={form.password}
+              onChange={onChange}
               required
             />
 
-            <label>Confirm Password</label>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              placeholder="Re-enter new password"
-              required
-            />
-          </>
-        )}
-
-        <button type="submit" className="primary-btn">
-          {isResetFlow ? 'Reset Password' : 'Sign In'}
-        </button>
-
-        {isResetFlow && (
-          <button type="button" className="ghost-btn" onClick={onCancelReset}>
-            Use Different Account
-          </button>
-        )}
-      </form>
-    </>
+            {authState.error && <div className="form-error">{authState.error}</div>}
+            <button className="primary-btn" type="submit" disabled={authState.submitting}>
+              {authState.submitting ? 'Signing In...' : 'Sign In'}
+            </button>
+          </form>
+        </div>
+      </main>
+    </div>
   );
 }
 
-function Layout({
-  role,
-  testingView,
-  isLoginView,
-  navItems,
-  currentPath,
-  onTestingViewChange,
-  onNewService,
-  customerSessionEmail,
-  onCustomerLogout,
-  searchQuery,
-  searchResults,
-  onSearchQueryChange,
-  onSearchSubmit,
-  onSearchSelect,
-  children
-}) {
+function SetupPasswordPage({ onComplete }) {
+  const inviteToken = getInviteToken();
+  const [state, setState] = useState({
+    loading: true,
+    submitting: false,
+    invite: null,
+    password: '',
+    passwordConfirm: '',
+    error: ''
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadInvite() {
+      if (!inviteToken) {
+        setState((prev) => ({ ...prev, loading: false, error: 'Missing invite token.' }));
+        return;
+      }
+      try {
+        const res = await apiFetch(`/auth/password-setup/?token=${encodeURIComponent(inviteToken)}`);
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.detail || `Invite lookup failed (${res.status})`);
+        if (cancelled) return;
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          invite: json.invite,
+          error: ''
+        }));
+      } catch (err) {
+        if (cancelled) return;
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error: err.message || 'Invite is invalid or expired.'
+        }));
+      }
+    }
+
+    loadInvite();
+    return () => { cancelled = true; };
+  }, [inviteToken]);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setState((prev) => ({ ...prev, submitting: true, error: '' }));
+    try {
+      const res = await apiFetch('/auth/password-setup/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: inviteToken,
+          password: state.password,
+          password_confirm: state.passwordConfirm
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.detail || JSON.stringify(json));
+      onComplete(json.user);
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        submitting: false,
+        error: err.message || 'Failed to set password.'
+      }));
+    }
+  }
+
+  return (
+    <div className="main main-login">
+      <header className="topbar topbar-login"></header>
+      <main className="content">
+        <h1 className="page-title">Set Password</h1>
+        <p className="page-subtitle">Finish setting up your employee account.</p>
+
+        <div className="card auth-card">
+          {state.loading && <p className="meta">Checking invite...</p>}
+          {!state.loading && state.invite && (
+            <form className="form" onSubmit={handleSubmit}>
+              <p className="meta">
+                {state.invite.full_name} · {state.invite.email} · {state.invite.role}
+              </p>
+              <label>New Password</label>
+              <input
+                type="password"
+                value={state.password}
+                onChange={(event) => setState((prev) => ({ ...prev, password: event.target.value }))}
+                required
+              />
+
+              <label>Confirm Password</label>
+              <input
+                type="password"
+                value={state.passwordConfirm}
+                onChange={(event) => setState((prev) => ({ ...prev, passwordConfirm: event.target.value }))}
+                required
+              />
+
+              {state.error && <div className="form-error">{state.error}</div>}
+              <button className="primary-btn" type="submit" disabled={state.submitting}>
+                {state.submitting ? 'Saving...' : 'Set Password'}
+              </button>
+            </form>
+          )}
+          {!state.loading && !state.invite && state.error && <div className="form-error">{state.error}</div>}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function Layout({ role, sessionUser, navItems, currentPath, onLogout, children }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -2744,712 +4782,246 @@ function Layout({
     setIsSidebarOpen(false);
   }
 
-  const isAdminCustomerDetail = currentPath === '/admin/customerdetail';
-
   return (
     <>
-      {!isLoginView && (
-        <aside className="sidebar">
-          <div className="logo">
-            <div className="logo-icon"></div>
-            <div className="logo-text">
-              <strong>Headstone</strong>
-              <span>Restoration</span>
-            </div>
+      <aside className="sidebar">
+        <div className="logo">
+          <div className="logo-icon"></div>
+          <div className="logo-text">
+            <strong>Headstone</strong>
+            <span>Restoration</span>
+          </div>
+        </div>
+
+        <nav className="nav">
+          {navItems.map((item) => (
+            <a
+              key={item.id}
+              className={`nav-item${item.to === currentPath ? ' active' : ''}`}
+              href={`#${item.to}`}
+              onClick={handleCloseMenu}
+            >
+              {item.label}
+            </a>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="main">
+        <header className="topbar">
+          <button
+            className="hamburger"
+            aria-label="Toggle navigation"
+            aria-expanded={isSidebarOpen}
+            onClick={handleToggleMenu}
+          >
+            <span className="bar"></span>
+          </button>
+          <div className="search">
+            <input type="text" placeholder="Search memorials, customers, cemeteries, GPS..." />
           </div>
 
-          <nav className="nav">
-            {navItems.map((item) => (
-              <a
-                key={item.id}
-                className={`nav-item${
-                  item.to === currentPath || (isAdminCustomerDetail && item.id === 'customers')
-                    ? ' active'
-                    : ''
-                }`}
-                href={`#${item.to}`}
-                onClick={handleCloseMenu}
-              >
-                {item.label}
-              </a>
-            ))}
-          </nav>
-        </aside>
-      )}
-
-      <div className={`main${isLoginView ? ' main-login' : ''}`}>
-        <header className={`topbar${isLoginView ? ' topbar-login' : ''}`}>
-          {!isLoginView && (
-            <button
-              className="hamburger"
-              aria-label="Toggle navigation"
-              aria-expanded={isSidebarOpen}
-              onClick={handleToggleMenu}
-            >
-              <span className="bar"></span>
-            </button>
-          )}
-          {!isLoginView && (
-            <div className="search">
-              <form
-                className="search-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  onSearchSubmit();
-                }}
-              >
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => onSearchQueryChange(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') {
-                      onSearchQueryChange('');
-                    }
-                  }}
-                  placeholder="Search memorials, customers, cemeteries, GPS..."
-                />
-                {searchQuery.trim() !== '' && (
-                  <div className="search-results" role="listbox" aria-label="Search results">
-                    {searchResults.length > 0 ? (
-                      searchResults.map((result) => (
-                        <button
-                          key={`${result.to}-${result.title}`}
-                          type="button"
-                          className="search-result-item"
-                          onClick={() => onSearchSelect(result.to)}
-                        >
-                          <span className="search-result-title">{result.title}</span>
-                          <span className="search-result-meta">{result.description}</span>
-                        </button>
-                      ))
-                    ) : (
-                      <div className="search-empty">No matches in this view</div>
-                    )}
-                  </div>
-                )}
-              </form>
-            </div>
-          )}
-
           <div className="topbar-actions">
-            <div className="role-switch">
-              <label className="role-switch-label" htmlFor="testing-view-select">Testing View</label>
-              <select
-                id="testing-view-select"
-                className="role-select"
-                value={testingView}
-                onChange={(event) => onTestingViewChange(event.target.value)}
-              >
-                {TEST_VIEW_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
+            <div className="role-chip">
+              {sessionUser?.profile_photo_url ? (
+                <img className="topbar-avatar" src={sessionUser.profile_photo_url} alt={sessionUser?.full_name || 'Profile'} />
+              ) : (
+                <div className="topbar-avatar topbar-avatar-empty">
+                  {(sessionUser?.full_name || sessionUser?.username || 'U').slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <strong>{sessionUser?.full_name || sessionUser?.username || 'User'}</strong>
+              <span>{ROLE_CONFIGS[role]?.label || role}</span>
             </div>
-            {!isLoginView && <div className="bell"></div>}
-            {role === 'admin' && !isLoginView && (
-              <button className="primary-btn" onClick={onNewService}>New Service</button>
-            )}
-            {role === 'customer' && customerSessionEmail && !isLoginView && (
-              <button className="ghost-btn" onClick={onCustomerLogout}>Logout</button>
-            )}
+            <div className="bell"></div>
+            <button className="ghost-btn" type="button" onClick={onLogout}>Logout</button>
           </div>
         </header>
 
         <main className="content">{children}</main>
       </div>
 
-      {!isLoginView && <div className="menu-overlay" onClick={handleCloseMenu}></div>}
+      <div className="menu-overlay" onClick={handleCloseMenu}></div>
     </>
   );
 }
 
 function App() {
   const [path, navigate] = useHashPath();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [customerAccounts, setCustomerAccounts] = useState(loadCustomerAccounts);
-  const [employeeAccounts, setEmployeeAccounts] = useState(loadEmployeeAccounts);
-  const [jobRecords, setJobRecords] = useState(loadJobRecords);
-  const [selectedAdminCustomerEmail, setSelectedAdminCustomerEmail] = useState('');
-  const [selectedMemorialId, setSelectedMemorialId] = useState('');
-  const [customerSessionEmail, setCustomerSessionEmail] = useState(loadCustomerSession);
-  const [customerResetEmail, setCustomerResetEmail] = useState('');
-  const [customerViewBypassAuth, setCustomerViewBypassAuth] = useState(false);
-  const [onboardingFeedback, setOnboardingFeedback] = useState(null);
-  const [userManagementFeedback, setUserManagementFeedback] = useState(null);
-  const { role, page, config, canonicalPath, view } = useMemo(() => parseRoute(path), [path]);
-  const isLoginView = view === 'login';
-  const testingView = isLoginView ? 'login' : role;
+  const [authForm, setAuthForm] = useState({ email: '', password: '' });
+  const [authState, setAuthState] = useState({
+    loading: true,
+    submitting: false,
+    authenticated: false,
+    user: null,
+    error: ''
+  });
+
+  const sessionRole = authState.user?.frontend_role || null;
+  const route = useMemo(() => parseRoute(path, sessionRole), [path, sessionRole]);
+  const { role, page, config, canonicalPath } = route;
 
   useEffect(() => {
-    try {
-      const darkModeEnabled = localStorage.getItem('hs_dark_mode') === '1';
-      document.body.classList.toggle('theme-dark', darkModeEnabled);
-    } catch (err) {
-      // ignore storage access issues
+    let cancelled = false;
+
+    async function loadSession() {
+      try {
+        const res = await apiFetch('/auth/session/');
+        const json = await res.json();
+        if (cancelled) return;
+        setAuthState({
+          loading: false,
+          submitting: false,
+          authenticated: Boolean(json.authenticated && json.user),
+          user: json.user || null,
+          error: ''
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setAuthState({
+          loading: false,
+          submitting: false,
+          authenticated: false,
+          user: null,
+          error: err.message || 'Failed to load session.'
+        });
+      }
     }
+
+    loadSession();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!canonicalPath) return;
+    if (authState.loading) return;
+    if (!authState.authenticated) {
+      if (path !== LOGIN_PATH && path !== SETUP_PASSWORD_PATH) navigate(LOGIN_PATH);
+      return;
+    }
+    if (path === SETUP_PASSWORD_PATH) {
+      return;
+    }
     if (path !== canonicalPath) {
       navigate(canonicalPath);
     }
-  }, [canonicalPath, navigate, path]);
+  }, [authState.authenticated, authState.loading, canonicalPath, navigate, path]);
 
-  useEffect(() => {
-    storeRole(role);
-  }, [role]);
+  async function handleLogin(event) {
+    event.preventDefault();
+    setAuthState((prev) => ({ ...prev, submitting: true, error: '' }));
+    try {
+      const res = await apiFetch('/auth/login/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authForm)
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.detail || `Login failed (${res.status})`);
+      }
 
-  useEffect(() => {
-    setSearchQuery('');
-  }, [canonicalPath]);
-
-  useEffect(() => {
-    saveCustomerAccounts(customerAccounts);
-  }, [customerAccounts]);
-
-  useEffect(() => {
-    saveEmployeeAccounts(employeeAccounts);
-  }, [employeeAccounts]);
-
-  useEffect(() => {
-    saveJobRecords(jobRecords);
-  }, [jobRecords]);
-
-  useEffect(() => {
-    storeCustomerSession(customerSessionEmail);
-  }, [customerSessionEmail]);
-
-  useEffect(() => {
-    if (!customerSessionEmail) return;
-    const exists = customerAccounts.some((account) => account.email === customerSessionEmail);
-    if (!exists) {
-      setCustomerSessionEmail('');
+      const nextRole = json.user?.frontend_role || 'admin';
+      setAuthState({
+        loading: false,
+        submitting: false,
+        authenticated: true,
+        user: json.user,
+        error: ''
+      });
+      setAuthForm({ email: '', password: '' });
+      navigate(getDefaultPathForRole(nextRole));
+    } catch (err) {
+      setAuthState((prev) => ({
+        ...prev,
+        loading: false,
+        submitting: false,
+        authenticated: false,
+        user: null,
+        error: err.message || 'Login failed.'
+      }));
     }
-  }, [customerAccounts, customerSessionEmail]);
+  }
 
-  useEffect(() => {
-    if (!(role === 'admin' && page === 'onboarding')) {
-      setOnboardingFeedback(null);
+  async function handleLogout() {
+    try {
+      await apiFetch('/auth/logout/', { method: 'POST' });
+    } catch (err) {
+      // ignore logout transport failures and clear client state anyway
     }
-  }, [role, page]);
 
-  useEffect(() => {
-    if (!(role === 'admin' && page === 'users')) {
-      setUserManagementFeedback(null);
-    }
-  }, [role, page]);
+    setAuthState({
+      loading: false,
+      submitting: false,
+      authenticated: false,
+      user: null,
+      error: ''
+    });
+    navigate(LOGIN_PATH);
+  }
 
-  useEffect(() => {
-    if (isLoginView || role !== 'customer') {
-      setCustomerViewBypassAuth(false);
-    }
-  }, [isLoginView, role]);
+  function handlePasswordSetupComplete(sessionUser) {
+    const nextRole = sessionUser?.frontend_role || 'employee';
+    setAuthState({
+      loading: false,
+      submitting: false,
+      authenticated: true,
+      user: sessionUser,
+      error: ''
+    });
+    navigate(getDefaultPathForRole(nextRole));
+  }
+
+  function handleAuthInputChange(event) {
+    const { name, value } = event.target;
+    setAuthForm((prev) => ({ ...prev, [name]: value }));
+  }
+
+  function handleSessionUserUpdate(nextUser) {
+    setAuthState((prev) => ({
+      ...prev,
+      user: nextUser
+    }));
+  }
+
+  if (authState.loading) {
+    return (
+      <div className="main main-login">
+        <main className="content">
+          <div className="card auth-card">
+            <p className="meta">Loading session...</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (path === SETUP_PASSWORD_PATH) {
+    return <SetupPasswordPage onComplete={handlePasswordSetupComplete} />;
+  }
+
+  if (!authState.authenticated) {
+    return (
+      <LoginPage
+        form={authForm}
+        authState={authState}
+        onChange={handleAuthInputChange}
+        onSubmit={handleLogin}
+      />
+    );
+  }
 
   const routeMap = ROUTES[role] || ROUTES.admin;
   const PageComponent = routeMap[page] || routeMap[config.defaultRoute];
-  const adminCustomers = useMemo(() => buildAdminCustomers(customerAccounts), [customerAccounts]);
-  const memorialRecords = useMemo(
-    () => buildMemorialRecords(adminCustomers, jobRecords),
-    [adminCustomers, jobRecords]
-  );
-  const selectedAdminCustomer = useMemo(() => {
-    const normalizedEmail = normalizeEmail(selectedAdminCustomerEmail);
-    if (!normalizedEmail) return null;
-    return adminCustomers.find((customer) => customer.email === normalizedEmail) || null;
-  }, [adminCustomers, selectedAdminCustomerEmail]);
-  const selectedMemorial = useMemo(
-    () => memorialRecords.find((record) => record.id === selectedMemorialId) || null,
-    [memorialRecords, selectedMemorialId]
-  );
-  const searchResults = useMemo(() => getSearchResults(role, searchQuery), [role, searchQuery]);
-
-  function handleTestingViewChange(nextView) {
-    if (nextView === 'login') {
-      setCustomerViewBypassAuth(false);
-      navigate('/login');
-      return;
-    }
-
-    setCustomerViewBypassAuth(nextView === 'customer');
-    const nextConfig = ROLE_CONFIGS[nextView] || ROLE_CONFIGS.admin;
-    navigate(`${nextConfig.basePath}/${nextConfig.defaultRoute}`);
-  }
-
-  function handleNewService() {
-    navigate('/admin/onboarding');
-  }
-
-  function handleOpenCustomerDetails(customer) {
-    if (!customer || !customer.email) return;
-    setSelectedAdminCustomerEmail(normalizeEmail(customer.email));
-    navigate('/admin/customerdetail');
-  }
-
-  function handleBackToCustomers() {
-    navigate('/admin/customers');
-  }
-
-  function handleOpenMemorialDetails(record, roleOverride) {
-    if (!record || !record.id) return;
-    const destinationRole = roleOverride || role;
-    setSelectedMemorialId(record.id);
-    navigate(`/${destinationRole}/memorialdetail`);
-  }
-
-  function handleBackToMemorials(roleOverride) {
-    const destinationRole = roleOverride || role;
-    navigate(`/${destinationRole}/memorials`);
-  }
-
-  function handleOpenCustomerFromMemorial(memorial) {
-    if (!memorial) return;
-    const targetCustomer = adminCustomers.find(
-      (candidate) => normalizeText(candidate.name) === normalizeText(memorial.customer)
-    );
-    if (targetCustomer) {
-      handleOpenCustomerDetails(targetCustomer);
-    }
-  }
-
-  function handleSearchSelect(nextPath) {
-    setSearchQuery('');
-    navigate(nextPath);
-  }
-
-  function handleSearchSubmit() {
-    if (searchResults.length > 0) {
-      handleSearchSelect(searchResults[0].to);
-    }
-  }
-
-  useEffect(() => {
-    if (!(role === 'admin' && page === 'customerdetail')) {
-      return;
-    }
-
-    if (selectedAdminCustomer) {
-      return;
-    }
-
-    if (adminCustomers.length === 0) {
-      navigate('/admin/customers');
-      return;
-    }
-
-    setSelectedAdminCustomerEmail(adminCustomers[0].email);
-  }, [adminCustomers, navigate, page, role, selectedAdminCustomer]);
-
-  useEffect(() => {
-    if (!(page === 'memorialdetail' && (role === 'admin' || role === 'employee'))) {
-      return;
-    }
-
-    if (selectedMemorial) {
-      return;
-    }
-
-    if (memorialRecords.length === 0) {
-      handleBackToMemorials(role);
-      return;
-    }
-
-    setSelectedMemorialId(memorialRecords[0].id);
-  }, [memorialRecords, page, role, selectedMemorial]);
-
-  function createManagedUser({
-    userType,
-    name,
-    email,
-    extraFields,
-    provisionPortalAccess = true
-  }) {
-    const normalizedType = userType === 'employee' ? 'employee' : 'customer';
-    const normalizedName = (name || '').trim();
-    const normalizedEmail = normalizeEmail(email);
-    const now = new Date().toISOString();
-
-    if (!normalizedName || !normalizedEmail) {
-      return { error: 'Name and email are required.' };
-    }
-
-    const isEmployee = normalizedType === 'employee';
-    const currentAccounts = isEmployee ? employeeAccounts : customerAccounts;
-    const existingAccount = currentAccounts.find((account) => account.email === normalizedEmail);
-    const shouldProvisionPortal = isEmployee ? true : provisionPortalAccess;
-    const temporaryPassword = existingAccount
-      ? (existingAccount.password || (shouldProvisionPortal ? generateTempPassword() : ''))
-      : (shouldProvisionPortal ? generateTempPassword() : '');
-    const mustResetPassword = existingAccount
-      ? Boolean(existingAccount.mustResetPassword)
-      : Boolean(shouldProvisionPortal);
-
-    const nextAccount = {
-      email: normalizedEmail,
-      name: normalizedName,
-      password: temporaryPassword,
-      mustResetPassword,
-      hasPortalAccess: shouldProvisionPortal,
-      userType: normalizedType,
-      updatedAt: now,
-      createdAt: existingAccount ? existingAccount.createdAt : now,
-      ...(extraFields || {})
-    };
-
-    const nextAccounts = existingAccount
-      ? currentAccounts.map((account) => (account.email === normalizedEmail ? nextAccount : account))
-      : [...currentAccounts, nextAccount];
-
-    if (isEmployee) {
-      setEmployeeAccounts(nextAccounts);
-    } else {
-      setCustomerAccounts(nextAccounts);
-    }
-
-    if (shouldProvisionPortal && !existingAccount) {
-      queueTempPasswordEmail({
-        email: normalizedEmail,
-        name: normalizedName,
-        temporaryPassword,
-        userType: normalizedType
-      });
-    }
-
-    return {
-      ok: true,
-      created: !existingAccount,
-      userType: normalizedType,
-      name: normalizedName,
-      email: normalizedEmail,
-      tempPassword: !existingAccount ? temporaryPassword : ''
-    };
-  }
-
-  function handleCreateService(payload) {
-    const memorialName = payload.memorialSearch || `${payload.customerName} Memorial`;
-    const memorialId = `${normalizeEmail(payload.customerEmail)}-intake`;
-    const result = createManagedUser({
-      userType: 'customer',
-      name: payload.customerName,
-      email: payload.customerEmail,
-      provisionPortalAccess: false,
-      extraFields: {
-        serviceType: payload.serviceType || 'Initial Restoration',
-        cemetery: payload.cemetery || 'Pending Assignment',
-        customerNotes: payload.intakeNotes || 'No notes recorded yet.',
-        lifetimeValue: '$0.00',
-        memorialDetails: [
-          {
-            id: memorialId,
-            memorial: memorialName,
-            cemetery: payload.cemetery || 'Pending Assignment',
-            subStatus: 'Intake',
-            plan: payload.serviceType || 'Initial Restoration',
-            nextService: 'Quote pending approval',
-            lastService: 'Not Started',
-            serviceInfo: payload.customerPhone
-              ? `Contact: ${payload.customerPhone}`
-              : 'Customer onboarding in progress',
-            photoStatus: payload.intakeFiles && payload.intakeFiles.length > 0
-              ? `${payload.intakeFiles.length} intake file(s) uploaded`
-              : 'No photos uploaded'
-          }
-        ]
-      }
-    });
-
-    if (!result || result.error) {
-      return result || { error: 'Unable to create service.' };
-    }
-
-    setJobRecords((records) => [
-      {
-        id: `job-${Date.now()}`,
-        memorialId,
-        memorial: memorialName,
-        customer: payload.customerName,
-        cemetery: payload.cemetery || 'Pending Assignment',
-        status: 'Intake',
-        createdAt: new Date().toISOString(),
-        completedAt: '',
-        nextService: 'Quote pending approval',
-        team: 'Unassigned',
-        technician: 'Unassigned',
-        customerNotes: payload.intakeNotes || 'No customer notes.',
-        leadershipNotes: 'Intake record created from onboarding.',
-        photoFiles: payload.intakeFiles || [],
-        documentFiles: []
-      },
-      ...records
-    ]);
-
-    setOnboardingFeedback({
-      name: result.name,
-      email: result.email,
-      intakeFiles: (payload.intakeFiles || []).length
-    });
-
-    return { ok: true };
-  }
-
-  function handleCreateUser(payload) {
-    const result = createManagedUser({
-      userType: payload.userType,
-      name: payload.name,
-      email: payload.email,
-      extraFields: payload.extraFields
-    });
-
-    if (!result || result.error) {
-      return result || { error: 'Unable to create user.' };
-    }
-
-    setUserManagementFeedback({
-      mode: 'created',
-      name: result.name,
-      email: result.email,
-      team: payload.extraFields?.team || ''
-    });
-
-    return { ok: true };
-  }
-
-  function handleUpdateEmployee(payload) {
-    const originalEmail = normalizeEmail(payload.originalEmail);
-    const nextEmail = normalizeEmail(payload.email);
-    if (!originalEmail) return { error: 'Employee record is missing.' };
-
-    const existing = employeeAccounts.find((account) => account.email === originalEmail);
-    if (!existing) return { error: 'Employee not found.' };
-
-    if (
-      nextEmail !== originalEmail
-      && employeeAccounts.some((account) => account.email === nextEmail)
-    ) {
-      return { error: 'Another employee already uses that email.' };
-    }
-
-    const nextAccounts = employeeAccounts.map((account) => {
-      if (account.email !== originalEmail) return account;
-      return {
-        ...account,
-        name: payload.name,
-        email: nextEmail,
-        phone: payload.phone,
-        employmentType: payload.employmentType,
-        team: payload.team,
-        updatedAt: new Date().toISOString()
-      };
-    });
-
-    setEmployeeAccounts(nextAccounts);
-    setUserManagementFeedback({
-      mode: 'updated',
-      name: payload.name,
-      email: nextEmail,
-      team: payload.team
-    });
-    return { ok: true };
-  }
-
-  function handleCustomerLogin({ email, password }) {
-    const normalizedEmail = normalizeEmail(email);
-    const account = customerAccounts.find((candidate) => candidate.email === normalizedEmail);
-
-    if (!account) {
-      return { error: 'Invalid email or password.' };
-    }
-
-    if (account.hasPortalAccess === false) {
-      return { error: 'Customer portal access is disabled for this account.' };
-    }
-
-    if (!account.password || account.password !== password) {
-      return { error: 'Invalid email or password.' };
-    }
-
-    if (account.mustResetPassword) {
-      setCustomerResetEmail(normalizedEmail);
-      return { ok: true, requiresReset: true };
-    }
-
-    setCustomerResetEmail('');
-    setCustomerSessionEmail(normalizedEmail);
-    return { ok: true };
-  }
-
-  function handleCustomerPasswordReset({ email, newPassword }) {
-    const normalizedEmail = normalizeEmail(email);
-    const account = customerAccounts.find((candidate) => candidate.email === normalizedEmail);
-
-    if (!account) {
-      return { error: 'Account not found.' };
-    }
-
-    const nextAccounts = customerAccounts.map((candidate) => {
-      if (candidate.email !== normalizedEmail) {
-        return candidate;
-      }
-
-      return {
-        ...candidate,
-        password: newPassword,
-        mustResetPassword: false,
-        updatedAt: new Date().toISOString()
-      };
-    });
-
-    setCustomerAccounts(nextAccounts);
-    setCustomerResetEmail('');
-    setCustomerSessionEmail(normalizedEmail);
-    return { ok: true };
-  }
-
-  function handleCancelCustomerReset() {
-    setCustomerResetEmail('');
-  }
-
-  function handleCustomerLogout() {
-    setCustomerSessionEmail('');
-    setCustomerResetEmail('');
-  }
-
-  function handleTestingLogin({ email, password, destinationRole }) {
-    if (destinationRole === 'customer') {
-      const result = handleCustomerLogin({ email, password });
-      if (!result || result.error) {
-        return result || { error: 'Unable to sign in as customer.' };
-      }
-      setCustomerViewBypassAuth(false);
-    }
-
-    const nextConfig = ROLE_CONFIGS[destinationRole] || ROLE_CONFIGS.admin;
-    navigate(`${nextConfig.basePath}/${nextConfig.defaultRoute}`);
-    return { ok: true };
-  }
-
-  let pageElement = isLoginView ? <TestingLoginPage onSignIn={handleTestingLogin} /> : <PageComponent />;
-
-  if (!isLoginView && role === 'admin' && page === 'onboarding') {
-    pageElement = (
-      <OnboardingPage
-        onCreateService={handleCreateService}
-        onboardingFeedback={onboardingFeedback}
-      />
-    );
-  }
-
-  if (!isLoginView && role === 'admin' && page === 'users') {
-    pageElement = (
-      <UsersAdminPage
-        onCreateUser={handleCreateUser}
-        onUpdateEmployee={handleUpdateEmployee}
-        userManagementFeedback={userManagementFeedback}
-        employeeAccounts={employeeAccounts}
-      />
-    );
-  }
-
-  if (!isLoginView && role === 'admin' && page === 'customers') {
-    pageElement = (
-      <CustomersPage
-        customers={adminCustomers}
-        onOpenCustomerDetails={handleOpenCustomerDetails}
-      />
-    );
-  }
-
-  if (!isLoginView && role === 'admin' && page === 'customerdetail') {
-    pageElement = (
-      <CustomerDetailPage
-        customer={selectedAdminCustomer}
-        onBack={handleBackToCustomers}
-        onOpenMemorial={(memorial) => {
-          if (!memorial) return;
-          const matching = memorialRecords.find(
-            (record) => memorialLookupKey(record) === memorialLookupKey({
-              memorial: memorial.memorial,
-              customer: selectedAdminCustomer?.name || '',
-              cemetery: memorial.cemetery
-            })
-          );
-          if (matching) {
-            handleOpenMemorialDetails(matching, 'admin');
-            return;
-          }
-          handleOpenMemorialDetails({
-            ...memorial,
-            id: memorial.id || memorialLookupKey({
-              memorial: memorial.memorial,
-              customer: selectedAdminCustomer?.name || '',
-              cemetery: memorial.cemetery
-            })
-          }, 'admin');
-        }}
-      />
-    );
-  }
-
-  if (!isLoginView && role === 'admin' && page === 'cemeteries') {
-    pageElement = (
-      <CemeteriesPage
-        customers={adminCustomers}
-        onOpenCustomerDetails={handleOpenCustomerDetails}
-      />
-    );
-  }
-
-  if (!isLoginView && page === 'memorials' && (role === 'admin' || role === 'employee')) {
-    pageElement = (
-      <MemorialsPage
-        memorialRecords={memorialRecords}
-        onOpenMemorial={(record) => handleOpenMemorialDetails(record, role)}
-      />
-    );
-  }
-
-  if (!isLoginView && page === 'memorialdetail' && (role === 'admin' || role === 'employee')) {
-    pageElement = (
-      <MemorialDetailPage
-        memorial={selectedMemorial}
-        jobRecords={jobRecords}
-        onBack={() => handleBackToMemorials(role)}
-        onOpenCustomer={handleOpenCustomerFromMemorial}
-        showCustomerAction={role === 'admin'}
-      />
-    );
-  }
-
-  if (!isLoginView && role === 'customer' && !customerSessionEmail && !customerViewBypassAuth) {
-    pageElement = (
-      <CustomerAuthPage
-        resetEmail={customerResetEmail}
-        onLogin={handleCustomerLogin}
-        onResetPassword={handleCustomerPasswordReset}
-        onCancelReset={handleCancelCustomerReset}
-      />
-    );
-  }
 
   return (
     <Layout
       role={role}
-      testingView={testingView}
-      isLoginView={isLoginView}
-      navItems={isLoginView ? [] : config.nav}
+      sessionUser={authState.user}
+      navItems={config.nav}
       currentPath={canonicalPath}
-      onTestingViewChange={handleTestingViewChange}
-      onNewService={handleNewService}
-      customerSessionEmail={customerSessionEmail}
-      onCustomerLogout={handleCustomerLogout}
-      searchQuery={searchQuery}
-      searchResults={searchResults}
-      onSearchQueryChange={setSearchQuery}
-      onSearchSubmit={handleSearchSubmit}
-      onSearchSelect={handleSearchSelect}
+      onLogout={handleLogout}
     >
-      {pageElement}
+      <PageComponent sessionUser={authState.user} onSessionUserUpdate={handleSessionUserUpdate} />
     </Layout>
   );
 }
