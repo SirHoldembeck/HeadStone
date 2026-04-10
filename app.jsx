@@ -1,4 +1,4 @@
-const { useEffect, useMemo, useState } = React;
+const { useEffect, useMemo, useRef, useState } = React;
 
 const ROLE_CONFIGS = {
   admin: {
@@ -785,10 +785,44 @@ function getServiceTypeLabel(service) {
 
 const LOGIN_PATH = '/login';
 const SETUP_PASSWORD_PATH = '/setup-password';
+const SKIP_LOGIN_STORAGE_KEY = 'hs_skip_login_v1';
+const DEMO_SESSION_USER = {
+  id: 'demo-admin',
+  username: 'demo.admin',
+  full_name: 'Demo Admin',
+  email: 'demo@headstone.local',
+  phone: '',
+  frontend_role: 'admin',
+  profile_photo_url: ''
+};
 
 function getDefaultPathForRole(role) {
   const config = ROLE_CONFIGS[role] || ROLE_CONFIGS.admin;
   return `${config.basePath}/${config.defaultRoute}`;
+}
+
+function getDemoSessionUser() {
+  return { ...DEMO_SESSION_USER };
+}
+
+function isSkipLoginEnabled() {
+  try {
+    return localStorage.getItem(SKIP_LOGIN_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+function setSkipLoginEnabled(enabled) {
+  try {
+    if (enabled) {
+      localStorage.setItem(SKIP_LOGIN_STORAGE_KEY, '1');
+    } else {
+      localStorage.removeItem(SKIP_LOGIN_STORAGE_KEY);
+    }
+  } catch (err) {
+    // ignore storage errors
+  }
 }
 
 function getInviteToken() {
@@ -4602,13 +4636,13 @@ ROUTES.frontdesk.customers = CustomersPageModern;
 ROUTES.frontdesk.cemeteries = CemeteriesPageModern;
 ROUTES.frontdesk.onboarding = OnboardingPageModern;
 
-function LoginPage({ form, authState, onChange, onSubmit }) {
+function LoginPage({ form, authState, onChange, onSkip, onSubmit }) {
   return (
     <div className="main main-login">
       <header className="topbar topbar-login"></header>
       <main className="content">
         <h1 className="page-title">Login</h1>
-        <p className="page-subtitle">Sign in with your email or username and password.</p>
+        <p className="page-subtitle">Sign in with your email or username and password, or skip into demo mode.</p>
 
         <div className="card auth-card">
           <form className="form" onSubmit={onSubmit}>
@@ -4633,9 +4667,14 @@ function LoginPage({ form, authState, onChange, onSubmit }) {
             />
 
             {authState.error && <div className="form-error">{authState.error}</div>}
-            <button className="primary-btn" type="submit" disabled={authState.submitting}>
-              {authState.submitting ? 'Signing In...' : 'Sign In'}
-            </button>
+            <div className="auth-actions">
+              <button className="primary-btn" type="submit" disabled={authState.submitting}>
+                {authState.submitting ? 'Signing In...' : 'Sign In'}
+              </button>
+              <button className="secondary-btn" type="button" onClick={onSkip} disabled={authState.submitting}>
+                Skip Login
+              </button>
+            </div>
           </form>
         </div>
       </main>
@@ -4849,26 +4888,42 @@ function Layout({ role, sessionUser, navItems, currentPath, onLogout, children }
 function App() {
   const [path, navigate] = useHashPath();
   const [authForm, setAuthForm] = useState({ email: '', password: '' });
-  const [authState, setAuthState] = useState({
-    loading: true,
-    submitting: false,
-    authenticated: false,
-    user: null,
-    error: ''
-  });
+  const sessionLoadGenerationRef = useRef(0);
+  const [authState, setAuthState] = useState(() => (
+    isSkipLoginEnabled()
+      ? {
+          loading: false,
+          submitting: false,
+          authenticated: true,
+          user: getDemoSessionUser(),
+          error: ''
+        }
+      : {
+          loading: true,
+          submitting: false,
+          authenticated: false,
+          user: null,
+          error: ''
+        }
+  ));
 
   const sessionRole = authState.user?.frontend_role || null;
   const route = useMemo(() => parseRoute(path, sessionRole), [path, sessionRole]);
   const { role, page, config, canonicalPath } = route;
 
   useEffect(() => {
+    if (isSkipLoginEnabled()) {
+      return undefined;
+    }
+
     let cancelled = false;
+    const requestGeneration = sessionLoadGenerationRef.current;
 
     async function loadSession() {
       try {
         const res = await apiFetch('/auth/session/');
         const json = await res.json();
-        if (cancelled) return;
+        if (cancelled || sessionLoadGenerationRef.current !== requestGeneration) return;
         setAuthState({
           loading: false,
           submitting: false,
@@ -4921,6 +4976,7 @@ function App() {
       }
 
       const nextRole = json.user?.frontend_role || 'admin';
+      setSkipLoginEnabled(false);
       setAuthState({
         loading: false,
         submitting: false,
@@ -4942,7 +4998,23 @@ function App() {
     }
   }
 
+  function handleSkipLogin() {
+    const demoUser = getDemoSessionUser();
+    sessionLoadGenerationRef.current += 1;
+    setSkipLoginEnabled(true);
+    setAuthForm({ email: '', password: '' });
+    setAuthState({
+      loading: false,
+      submitting: false,
+      authenticated: true,
+      user: demoUser,
+      error: ''
+    });
+    navigate(getDefaultPathForRole(demoUser.frontend_role || 'admin'));
+  }
+
   async function handleLogout() {
+    setSkipLoginEnabled(false);
     try {
       await apiFetch('/auth/logout/', { method: 'POST' });
     } catch (err) {
@@ -4961,6 +5033,7 @@ function App() {
 
   function handlePasswordSetupComplete(sessionUser) {
     const nextRole = sessionUser?.frontend_role || 'employee';
+    setSkipLoginEnabled(false);
     setAuthState({
       loading: false,
       submitting: false,
@@ -4989,6 +5062,11 @@ function App() {
         <main className="content">
           <div className="card auth-card">
             <p className="meta">Loading session...</p>
+            <div className="auth-actions">
+              <button className="secondary-btn" type="button" onClick={handleSkipLogin}>
+                Skip Login
+              </button>
+            </div>
           </div>
         </main>
       </div>
@@ -5006,6 +5084,7 @@ function App() {
         authState={authState}
         onChange={handleAuthInputChange}
         onSubmit={handleLogin}
+        onSkip={handleSkipLogin}
       />
     );
   }

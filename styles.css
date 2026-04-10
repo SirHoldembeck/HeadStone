@@ -1067,6 +1067,20 @@ textarea {
   max-width: 520px;
 }
 
+.auth-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.auth-actions .primary-btn,
+.auth-actions .secondary-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .profile-photo-panel {
   display: flex;
   flex-direction: column;
@@ -1792,6 +1806,10 @@ body.theme-dark .revenue-rate {
 
   .topbar-actions .primary-btn {
     display: none;
+  }
+
+  .auth-actions {
+    flex-direction: column;
   }
 
   .search input {
